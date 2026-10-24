@@ -58,7 +58,7 @@ Browser → `web` (`/api/v1/...` rewrite) → FastAPI middleware (request ID →
 
 ## 5. Dependency versions
 
-Pinned in `api/pyproject.toml` / `api/requirements.lock` and `web/package.json` / `web/package-lock.json`; the exact versions are listed in `README.md`.
+Pinned in `api/pyproject.toml` + `api/uv.lock` (exported to `api/requirements.lock` for the Docker image) and `web/package.json` + `web/package-lock.json`. Headline versions are listed in `README.md` (Stack).
 
 ## 6. Not in Phase 2 (explicitly)
 

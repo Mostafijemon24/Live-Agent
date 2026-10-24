@@ -1,0 +1,92 @@
+# Steward — development and single-VPS deployment.
+#   docker compose up -d --build                 # app on http://localhost:3000
+#   docker compose --profile tls up -d --build   # + Caddy with automatic HTTPS for $DOMAIN
+# Only the web app (or Caddy) publishes a port. PostgreSQL and the API stay on the private network.
+name: steward
+
+x-api-env: &api-env
+  ENV: ${APP_ENV:-development}
+  DATABASE_URL: postgresql+psycopg://steward_app:${STEWARD_APP_PASSWORD:?set STEWARD_APP_PASSWORD}@db:5432/steward
+  APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+  TRUST_PROXY_HEADERS: "true"
+  STORAGE_DIR: /data/storage
+  MAIL_BACKEND: ${MAIL_BACKEND:-outbox}
+  MAIL_OUTBOX_DIR: /data/mail-outbox
+  MAIL_FROM: ${MAIL_FROM:-Steward <no-reply@localhost>}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD}
+      STEWARD_OWNER_PASSWORD: ${STEWARD_OWNER_PASSWORD:?set STEWARD_OWNER_PASSWORD}
+      STEWARD_APP_PASSWORD: ${STEWARD_APP_PASSWORD:?set STEWARD_APP_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./deploy/db/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d steward"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # No "ports:" — the database is never exposed outside the Docker network.
+
+  migrate:
+    build: ./api
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *api-env
+      MIGRATION_DATABASE_URL: postgresql+psycopg://steward_owner:${STEWARD_OWNER_PASSWORD}@db:5432/steward
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    environment: *api-env
+    volumes:
+      - storage:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: ./web
+      args:
+        API_INTERNAL_URL: http://api:8000
+        NEXT_PUBLIC_DEMO_MODE: "false"
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:3000:3000"
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - web
+
+volumes:
+  db-data:
+  storage:
+  caddy-data:

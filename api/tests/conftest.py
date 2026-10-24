@@ -26,7 +26,9 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 
-OWNER_ADMIN_URL = os.environ.get("TEST_OWNER_URL", "postgresql+psycopg://steward_owner:devowner@127.0.0.1:5432/postgres")
+OWNER_ADMIN_URL = os.environ.get(
+    "TEST_OWNER_URL", "postgresql+psycopg://steward_owner:devowner@127.0.0.1:5432/postgres"
+)
 APP_URL = os.environ.get("TEST_APP_URL", "postgresql+psycopg://steward_app:devapp@127.0.0.1:5432/steward_test")
 TEST_DB = make_url(APP_URL).database or ""
 if not TEST_DB.endswith("_test"):
@@ -54,7 +56,12 @@ def recreate_database(name: str) -> None:
     assert name.endswith("_test"), "only *_test databases may be dropped"
     admin = create_engine(OWNER_ADMIN_URL, isolation_level="AUTOCOMMIT")
     with admin.connect() as c:
-        c.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :d AND pid <> pg_backend_pid()"), {"d": name})
+        c.execute(
+            text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :d AND pid <> pg_backend_pid()"
+            ),
+            {"d": name},
+        )
         c.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
         c.execute(text(f'CREATE DATABASE "{name}" OWNER steward_owner'))
         c.execute(text(f'REVOKE ALL ON DATABASE "{name}" FROM PUBLIC'))

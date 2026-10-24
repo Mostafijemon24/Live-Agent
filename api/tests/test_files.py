@@ -95,24 +95,35 @@ def test_deletion_request_never_deletes(make_user: Any, owner_engine: Any) -> No
     r = api.post(f"/files/{f['id']}/deletion-request", {"reason": "Not used anymore"})
     assert r.status_code == 201
     appr = r.json()
-    assert appr["category"] == "record_deletion" and appr["affected_items"] == ["old.csv"] and appr["status"] == "pending"
+    assert (
+        appr["category"] == "record_deletion" and appr["affected_items"] == ["old.csv"] and appr["status"] == "pending"
+    )
     assert api.get(f"/files/{f['id']}").json()["deletion_requested"] is True
     assert api.post(f"/files/{f['id']}/deletion-request", {"reason": "again"}).status_code == 409
     # The request records target, scope, expected records, reason, requester and approval link.
     with owner_engine.connect() as c:
-        dr = c.execute(text("SELECT target_type, target_id, scope, expected_affected, reason, requested_by, approval_id, status FROM deletion_requests")).all()
-    mine = [d for d in dr if str(d.target_id) == f["id"]][0]
+        dr = c.execute(
+            text(
+                "SELECT target_type, target_id, scope, expected_affected, reason, requested_by, approval_id, status FROM deletion_requests"
+            )
+        ).all()
+    mine = next(d for d in dr if str(d.target_id) == f["id"])
     assert mine.target_type == "file" and mine.reason == "Not used anymore" and str(mine.approval_id) == appr["id"]
     assert mine.expected_affected[0]["name"] == "old.csv" and mine.status == "pending_approval"
     # Approving records the decision only.
-    r = api.post(f"/approvals/{appr['id']}/decision", {"decision": "approve", "acknowledged": True, "confirmed_items": ["old.csv"]})
+    r = api.post(
+        f"/approvals/{appr['id']}/decision",
+        {"decision": "approve", "acknowledged": True, "confirmed_items": ["old.csv"]},
+    )
     assert r.status_code == 200
     assert r.json()["status"] == "approved" and r.json()["execution_state"] == "blocked_until_phase3"
     # The file and its bytes still exist.
     assert api.get(f"/files/{f['id']}").status_code == 200
     assert api.get(f"/files/{f['id']}/download").status_code == 200
     with owner_engine.connect() as c:
-        status = c.execute(text("SELECT status FROM deletion_requests WHERE approval_id = :a"), {"a": appr["id"]}).scalar_one()
+        status = c.execute(
+            text("SELECT status FROM deletion_requests WHERE approval_id = :a"), {"a": appr["id"]}
+        ).scalar_one()
     assert status == "approved_blocked"
 
 

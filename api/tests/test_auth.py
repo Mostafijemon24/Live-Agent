@@ -12,7 +12,9 @@ GENERIC = "That email and password combination did not match, or the email addre
 
 
 def _register(api: Api, email: str, password: str = PASSWORD) -> Any:
-    return api.post("/auth/register", {"name": "Ada Lovelace", "email": email, "password": password, "accept_terms": True})
+    return api.post(
+        "/auth/register", {"name": "Ada Lovelace", "email": email, "password": password, "accept_terms": True}
+    )
 
 
 def test_full_registration_verification_login_flow(app: Any, owner_engine: Any) -> None:
@@ -80,7 +82,10 @@ def test_password_policy_and_input_validation(app: Any) -> None:
     r = api.post("/auth/register", {"name": "A", "email": new_email(), "password": PASSWORD, "accept_terms": False})
     assert r.status_code == 422
     # Unknown fields are rejected (no mass assignment, e.g. role or workspace_id).
-    r = api.post("/auth/register", {"name": "A", "email": new_email(), "password": PASSWORD, "accept_terms": True, "role": "admin"})
+    r = api.post(
+        "/auth/register",
+        {"name": "A", "email": new_email(), "password": PASSWORD, "accept_terms": True, "role": "admin"},
+    )
     assert r.status_code == 422
 
 
@@ -114,7 +119,9 @@ def test_session_idle_and_absolute_expiry(make_user: Any, owner_engine: Any) -> 
     api = make_user()
     uid = api.me["user"]["id"]
     with owner_engine.begin() as c:
-        c.execute(text("UPDATE sessions SET idle_expires_at = now() - interval '1 minute' WHERE user_id = :u"), {"u": uid})
+        c.execute(
+            text("UPDATE sessions SET idle_expires_at = now() - interval '1 minute' WHERE user_id = :u"), {"u": uid}
+        )
     assert api.get("/me").json()["error"]["code"] == "session_expired"
 
     api2 = make_user()
@@ -174,7 +181,9 @@ def test_expired_reset_token_rejected(app: Any, make_user: Any, owner_engine: An
     anon.post("/auth/forgot-password", {"email": api.email})
     token = latest_token(api.email, "/reset-password")
     with owner_engine.begin() as c:
-        c.execute(text("UPDATE auth_tokens SET expires_at = now() - interval '1 second' WHERE purpose = 'reset_password'"))
+        c.execute(
+            text("UPDATE auth_tokens SET expires_at = now() - interval '1 second' WHERE purpose = 'reset_password'")
+        )
     r = anon.post("/auth/reset-password", {"token": token, "password": "new-password-77"})
     assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_or_expired_token"
 

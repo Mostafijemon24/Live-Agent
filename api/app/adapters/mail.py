@@ -37,7 +37,8 @@ class OutboxMailer:
         m["From"] = self.sender
         m["To"] = msg.to
         m["Subject"] = msg.subject
-        m.set_content(msg.text)
+        # 8bit keeps links readable and copy-pasteable when a developer opens the file.
+        m.set_content(msg.text, cte="8bit")
         name = f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}.eml"
         path = self.outbox / name
         path.write_bytes(bytes(m))

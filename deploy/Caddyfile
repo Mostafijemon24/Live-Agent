@@ -1,0 +1,12 @@
+# TLS termination and reverse proxy in front of the web app.
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+	# Never proxy internal health/docs paths of the API to the internet.
+	@internal path /healthz /api/v1/docs* /api/v1/openapi.json
+	respond @internal 404
+	reverse_proxy web:3000
+}

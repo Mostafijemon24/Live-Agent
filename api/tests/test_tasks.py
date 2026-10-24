@@ -50,7 +50,9 @@ def test_create_task_validation(make_user: Any) -> None:
         r = api.post("/tasks", body)
         assert r.status_code == 422, body
         assert any(d["field"] == field for d in r.json()["error"]["details"]), r.json()
-    r = api.post("/tasks", {"prompt": "Publish to my website please", "type": "website", "integration_key": "wordpress"})
+    r = api.post(
+        "/tasks", {"prompt": "Publish to my website please", "type": "website", "integration_key": "wordpress"}
+    )
     assert r.status_code == 422 and r.json()["error"]["code"] == "integration_not_connected"
 
 
@@ -85,12 +87,18 @@ def test_plan_approval_flow_without_execution_engine(make_user: Any, owner_engin
     t = create_task(api)
     with owner_engine.begin() as c:
         ws = c.execute(text("SELECT workspace_id FROM tasks WHERE id = :t"), {"t": t["id"]}).scalar_one()
-        for i, (title, risk, appr) in enumerate([("Read site", "read_only", False), ("Apply fixes", "production_change", True)], 1):
+        for i, (title, risk, appr) in enumerate(
+            [("Read site", "read_only", False), ("Apply fixes", "production_change", True)], 1
+        ):
             c.execute(
-                text("INSERT INTO task_steps (workspace_id, task_id, position, title, tool, risk, requires_approval) VALUES (:w,:t,:p,:ti,'WordPress',:r,:a)"),
+                text(
+                    "INSERT INTO task_steps (workspace_id, task_id, position, title, tool, risk, requires_approval) VALUES (:w,:t,:p,:ti,'WordPress',:r,:a)"
+                ),
                 {"w": ws, "t": t["id"], "p": i, "ti": title, "r": risk, "a": appr},
             )
-        c.execute(text("UPDATE tasks SET status = 'awaiting_approval', waiting_for = NULL WHERE id = :t"), {"t": t["id"]})
+        c.execute(
+            text("UPDATE tasks SET status = 'awaiting_approval', waiting_for = NULL WHERE id = :t"), {"t": t["id"]}
+        )
     task = api.get(f"/tasks/{t['id']}").json()
     assert set(task["allowed_actions"]) == {"approve_plan", "reject_plan", "revise_plan", "cancel"}
     steps = task["plan"]["steps"]
@@ -110,7 +118,12 @@ def test_reject_plan_cancels(make_user: Any, owner_engine: Any) -> None:
     t = create_task(api)
     with owner_engine.begin() as c:
         ws = c.execute(text("SELECT workspace_id FROM tasks WHERE id = :t"), {"t": t["id"]}).scalar_one()
-        c.execute(text("INSERT INTO task_steps (workspace_id, task_id, position, title, tool, risk) VALUES (:w,:t,1,'s','x','read_only')"), {"w": ws, "t": t["id"]})
+        c.execute(
+            text(
+                "INSERT INTO task_steps (workspace_id, task_id, position, title, tool, risk) VALUES (:w,:t,1,'s','x','read_only')"
+            ),
+            {"w": ws, "t": t["id"]},
+        )
         c.execute(text("UPDATE tasks SET status = 'awaiting_approval' WHERE id = :t"), {"t": t["id"]})
     r = api.post(f"/tasks/{t['id']}/plan/reject", {"note": "Not now"})
     assert r.json()["status"] == "cancelled"

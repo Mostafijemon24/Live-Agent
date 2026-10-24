@@ -20,17 +20,41 @@ def two_tenants(make_user: Any, owner_engine: Any) -> dict[str, Any]:
     appr = a.post(f"/files/{f['id']}/deletion-request", {"reason": "No longer needed"}).json()
     auto = a.post(
         "/automations",
-        {"name": "Alice weekly", "trigger": "manual", "template": "SEO report", "tools": [], "file_scope": "No files",
-         "approval_policy": "Ask before any change"},
+        {
+            "name": "Alice weekly",
+            "trigger": "manual",
+            "template": "SEO report",
+            "tools": [],
+            "file_scope": "No files",
+            "approval_policy": "Ask before any change",
+        },
     ).json()
     notes = a.get("/notifications").json()["items"]
     # Give Alice a report + artifact so the Reports view has something to leak.
     with owner_engine.begin() as c:
-        c.execute(text("UPDATE tasks SET report = '{\"summary\":\"secret\",\"open_issues\":\"x\",\"next_step\":\"y\"}'::jsonb WHERE id = :t"), {"t": task["id"]})
+        c.execute(
+            text(
+                'UPDATE tasks SET report = \'{"summary":"secret","open_issues":"x","next_step":"y"}\'::jsonb WHERE id = :t'
+            ),
+            {"t": task["id"]},
+        )
         ws = c.execute(text("SELECT workspace_id FROM tasks WHERE id = :t"), {"t": task["id"]}).scalar_one()
-        c.execute(text("INSERT INTO artifacts (workspace_id, task_id, name, kind, provenance) VALUES (:w, :t, 'alice-report.pdf', 'Report', 'ai_generated')"),
-                  {"w": ws, "t": task["id"]})
-    return {"a": a, "b": b, "task": task, "file": f, "approval": appr, "automation": auto, "notification": notes[0], "ws_a": ws}
+        c.execute(
+            text(
+                "INSERT INTO artifacts (workspace_id, task_id, name, kind, provenance) VALUES (:w, :t, 'alice-report.pdf', 'Report', 'ai_generated')"
+            ),
+            {"w": ws, "t": task["id"]},
+        )
+    return {
+        "a": a,
+        "b": b,
+        "task": task,
+        "file": f,
+        "approval": appr,
+        "automation": auto,
+        "notification": notes[0],
+        "ws_a": ws,
+    }
 
 
 def _is_not_found(r: Any) -> None:
@@ -60,7 +84,10 @@ def test_files_are_isolated(two_tenants: dict[str, Any]) -> None:
     _is_not_found(b.post(f"/files/{fid}/deletion-request", {"reason": "steal"}))
     assert b.get("/files").json()["total"] == 0
     # Cannot attach someone else's file to your own task.
-    r = b.post("/tasks", {"prompt": "Summarise the attached spreadsheet", "type": "file_analysis", "attachment_file_ids": [fid]})
+    r = b.post(
+        "/tasks",
+        {"prompt": "Summarise the attached spreadsheet", "type": "file_analysis", "attachment_file_ids": [fid]},
+    )
     _is_not_found(r)
     assert two_tenants["a"].get(f"/files/{fid}").json()["classification"] == "unknown"
 
@@ -85,7 +112,10 @@ def test_reports_are_isolated(two_tenants: dict[str, Any]) -> None:
 def test_integrations_are_isolated(two_tenants: dict[str, Any], owner_engine: Any) -> None:
     a, b = two_tenants["a"], two_tenants["b"]
     with owner_engine.begin() as c:
-        c.execute(text("INSERT INTO integrations (workspace_id, key, status) VALUES (:w, 'notion', 'connected')"), {"w": two_tenants["ws_a"]})
+        c.execute(
+            text("INSERT INTO integrations (workspace_id, key, status) VALUES (:w, 'notion', 'connected')"),
+            {"w": two_tenants["ws_a"]},
+        )
     status = {i["key"]: i["status"] for i in a.get("/integrations").json()}
     assert status["notion"] == "connected"
     status_b = {i["key"]: i["status"] for i in b.get("/integrations").json()}
@@ -127,7 +157,9 @@ def test_malformed_ids_and_client_supplied_workspace_are_ignored(two_tenants: di
     b = two_tenants["b"]
     _is_not_found(b.get("/tasks/not-a-uuid"))
     # A workspace_id in the body is rejected (unknown field), never trusted.
-    r = b.post("/tasks", {"prompt": "Do something useful please", "type": "custom", "workspace_id": str(two_tenants["ws_a"])})
+    r = b.post(
+        "/tasks", {"prompt": "Do something useful please", "type": "custom", "workspace_id": str(two_tenants["ws_a"])}
+    )
     assert r.status_code == 422
     # Query parameters cannot widen scope either.
     assert b.get("/tasks", params={"workspace_id": str(two_tenants["ws_a"])}).json()["total"] == 0
@@ -138,6 +170,8 @@ def test_database_rejects_cross_tenant_child_rows(two_tenants: dict[str, Any], o
     b_ws = two_tenants["b"].me["workspace"]["id"]
     with pytest.raises(IntegrityError), owner_engine.begin() as c:
         c.execute(
-            text("INSERT INTO task_events (workspace_id, task_id, level, kind, message) VALUES (:w, :t, 'info', 'x', 'x')"),
+            text(
+                "INSERT INTO task_events (workspace_id, task_id, level, kind, message) VALUES (:w, :t, 'info', 'x', 'x')"
+            ),
             {"w": b_ws, "t": two_tenants["task"]["id"]},
         )

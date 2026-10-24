@@ -1,6 +1,5 @@
 import type { AgentApi } from "./client";
 import { HttpAgentApi } from "./http";
-import { MockAgentApi } from "./mock";
 
 /**
  * Demo mode is opt-in and isolated: it is only used when the build sets
@@ -11,7 +10,16 @@ export const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
 let instance: AgentApi | null = null;
 export function getApi(): AgentApi {
-  if (!instance) instance = DEMO_MODE ? new MockAgentApi() : new HttpAgentApi();
+  if (!instance) {
+    if (process.env.NEXT_PUBLIC_DEMO_MODE === "true") {
+      // Inlined at build time: production builds drop this branch, so the mock
+      // adapter and its sample data are not shipped at all.
+      const { MockAgentApi } = require("./mock") as typeof import("./mock");
+      instance = new MockAgentApi();
+    } else {
+      instance = new HttpAgentApi();
+    }
+  }
   return instance;
 }
 

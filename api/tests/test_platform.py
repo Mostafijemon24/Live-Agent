@@ -34,7 +34,12 @@ def test_login_rate_limited_per_email(app: Any, make_user: Any, owner_engine: An
 
 def test_register_rate_limited_per_ip(app: Any) -> None:
     api = Api(app, ip="198.51.100.7")
-    codes = [api.post("/auth/register", {"name": "N", "email": new_email(), "password": PASSWORD, "accept_terms": True}).status_code for _ in range(6)]
+    codes = [
+        api.post(
+            "/auth/register", {"name": "N", "email": new_email(), "password": PASSWORD, "accept_terms": True}
+        ).status_code
+        for _ in range(6)
+    ]
     assert codes == [202] * 5 + [429]
 
 
@@ -46,7 +51,10 @@ def test_forgot_password_rate_limited(app: Any) -> None:
 
 def test_task_creation_rate_limited(make_user: Any) -> None:
     api = make_user()
-    codes = [api.post("/tasks", {"prompt": f"Research item number {i} in detail", "type": "research"}).status_code for i in range(31)]
+    codes = [
+        api.post("/tasks", {"prompt": f"Research item number {i} in detail", "type": "research"}).status_code
+        for i in range(31)
+    ]
     assert codes[:30] == [201] * 30 and codes[30] == 429
 
 
@@ -98,7 +106,11 @@ def test_error_envelope_and_request_id(app: Any) -> None:
 
 def test_oversized_request_rejected(app: Any, monkeypatch: Any) -> None:
     api = Api(app)
-    r = api.c.post("/api/v1/auth/login", content=b"x" * (31 * 1024 * 1024), headers={"X-CSRF-Token": api.csrf, "Content-Type": "application/json"})
+    r = api.c.post(
+        "/api/v1/auth/login",
+        content=b"x" * (31 * 1024 * 1024),
+        headers={"X-CSRF-Token": api.csrf, "Content-Type": "application/json"},
+    )
     assert r.status_code == 413 and r.json()["error"]["code"] == "payload_too_large"
 
 
@@ -118,12 +130,28 @@ def _ts_fields(name: str) -> set[str]:
 @pytest.mark.parametrize(
     ("ts", "model"),
     [
-        ("User", S.UserOut), ("Me", S.MeOut), ("TaskSummary", S.TaskSummaryOut), ("Task", S.TaskOut), ("TaskStep", S.TaskStepOut),
-        ("TaskEvent", S.TaskEventOut), ("Approval", S.ApprovalOut), ("FileItem", S.FileOut), ("Automation", S.AutomationOut),
-        ("Integration", S.IntegrationOut), ("ActivityEvent", S.ActivityOut), ("NotificationItem", S.NotificationOut),
-        ("Dashboard", S.DashboardOut), ("SecurityStatus", S.SecurityStatusOut), ("Settings", S.SettingsOut), ("Usage", S.UsageOut),
-        ("UploadLimits", S.UploadLimitsOut), ("Artifact", S.ArtifactOut), ("AccountRequest", S.AccountRequestOut),
-        ("CreateTaskInput", S.CreateTaskIn), ("DecisionInput", S.DecisionIn), ("CreateAutomationInput", S.CreateAutomationIn),
+        ("User", S.UserOut),
+        ("Me", S.MeOut),
+        ("TaskSummary", S.TaskSummaryOut),
+        ("Task", S.TaskOut),
+        ("TaskStep", S.TaskStepOut),
+        ("TaskEvent", S.TaskEventOut),
+        ("Approval", S.ApprovalOut),
+        ("FileItem", S.FileOut),
+        ("Automation", S.AutomationOut),
+        ("Integration", S.IntegrationOut),
+        ("ActivityEvent", S.ActivityOut),
+        ("NotificationItem", S.NotificationOut),
+        ("Dashboard", S.DashboardOut),
+        ("SecurityStatus", S.SecurityStatusOut),
+        ("Settings", S.SettingsOut),
+        ("Usage", S.UsageOut),
+        ("UploadLimits", S.UploadLimitsOut),
+        ("Artifact", S.ArtifactOut),
+        ("AccountRequest", S.AccountRequestOut),
+        ("CreateTaskInput", S.CreateTaskIn),
+        ("DecisionInput", S.DecisionIn),
+        ("CreateAutomationInput", S.CreateAutomationIn),
     ],
 )
 def test_backend_schemas_match_frontend_types(ts: str, model: Any) -> None:
@@ -147,7 +175,13 @@ def test_openapi_lists_documented_endpoints(app: Any) -> None:
 def test_dashboard_reflects_real_data(make_user: Any) -> None:
     api = make_user()
     d = api.get("/dashboard").json()
-    assert d["counts"] == {"in_progress": 0, "awaiting_approval_plans": 0, "pending_actions": 0, "completed_week": 0, "needs_attention": 0}
+    assert d["counts"] == {
+        "in_progress": 0,
+        "awaiting_approval_plans": 0,
+        "pending_actions": 0,
+        "completed_week": 0,
+        "needs_attention": 0,
+    }
     assert d["agent"]["status"] == "not_connected" and d["agent"]["planner"] == "not_configured"
     assert d["setup"] == {"verify_email": True, "privacy": False, "integration": False, "first_task": False}
     assert d["unread_notifications"] == 1  # welcome note
@@ -161,9 +195,16 @@ def test_settings_preferences_and_validation(make_user: Any) -> None:
     s = api.get("/settings").json()
     assert s["enforced"] is False and s["workspace"]["can_edit"] is True and s["workspace"]["privacy_mode"] == "strict"
     r = api.patch("/me/preferences", {"name": "New Name", "timezone": "Asia/Dhaka", "notifications": {"digest": True}})
-    assert r.status_code == 200 and r.json()["profile"]["name"] == "New Name" and r.json()["notifications"]["digest"] is True
+    assert (
+        r.status_code == 200
+        and r.json()["profile"]["name"] == "New Name"
+        and r.json()["notifications"]["digest"] is True
+    )
     assert api.patch("/me/preferences", {"timezone": "Mars/Base"}).status_code == 422
-    r = api.patch("/workspace/settings", {"allowed_domains": ["Example.com", "example.com", " docs.example.org "], "ai_rules": {"del": False}})
+    r = api.patch(
+        "/workspace/settings",
+        {"allowed_domains": ["Example.com", "example.com", " docs.example.org "], "ai_rules": {"del": False}},
+    )
     assert r.status_code == 200
     assert r.json()["workspace"]["allowed_domains"] == ["example.com", "docs.example.org"]
     assert r.json()["workspace"]["ai_rules"]["del"] is False
@@ -177,7 +218,9 @@ def test_settings_preferences_and_validation(make_user: Any) -> None:
 def test_member_role_cannot_change_workspace_settings(make_user: Any, owner_engine: Any) -> None:
     api = make_user()
     with owner_engine.begin() as c:
-        c.execute(text("UPDATE workspace_memberships SET role = 'member' WHERE user_id = :u"), {"u": api.me["user"]["id"]})
+        c.execute(
+            text("UPDATE workspace_memberships SET role = 'member' WHERE user_id = :u"), {"u": api.me["user"]["id"]}
+        )
     r = api.patch("/workspace/settings", {"name": "Hijacked"})
     assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden"
     assert api.get("/settings").json()["workspace"]["can_edit"] is False
@@ -185,8 +228,14 @@ def test_member_role_cannot_change_workspace_settings(make_user: Any, owner_engi
 
 def test_onboarding_saves_preferences(make_user: Any) -> None:
     api = make_user()
-    r = api.post("/me/onboarding", {"goals": ["wordpress", "research"], "where": ["workspace_files"],
-                                    "ai_rules": {"share": True, "publish": True, "prod": True, "del": True, "folders": False}})
+    r = api.post(
+        "/me/onboarding",
+        {
+            "goals": ["wordpress", "research"],
+            "where": ["workspace_files"],
+            "ai_rules": {"share": True, "publish": True, "prod": True, "del": True, "folders": False},
+        },
+    )
     assert r.status_code == 200 and r.json()["user"]["onboarding_completed"] is True
     assert api.get("/settings").json()["workspace"]["ai_rules"]["folders"] is False
     assert api.post("/me/onboarding", {"goals": ["Bad Label!"], "where": [], "ai_rules": {}}).status_code == 422
@@ -194,8 +243,16 @@ def test_onboarding_saves_preferences(make_user: Any) -> None:
 
 def test_automations_scheduled_stay_paused(make_user: Any) -> None:
     api = make_user()
-    base = {"template": "SEO report", "tools": ["Agent analysis"], "file_scope": "No files", "approval_policy": "Ask before any change"}
-    sched = api.post("/automations", {"name": "Weekly", "trigger": "schedule", "frequency": "weekly", "day": "Monday", "time": "08:00", **base}).json()
+    base = {
+        "template": "SEO report",
+        "tools": ["Agent analysis"],
+        "file_scope": "No files",
+        "approval_policy": "Ask before any change",
+    }
+    sched = api.post(
+        "/automations",
+        {"name": "Weekly", "trigger": "schedule", "frequency": "weekly", "day": "Monday", "time": "08:00", **base},
+    ).json()
     assert sched["enabled"] is False and sched["schedule_text"] == "Every Monday at 08:00" and sched["ref"] == "AU-1"
     r = api.patch(f"/automations/{sched['id']}", {"enabled": True})
     assert r.status_code == 409 and r.json()["error"]["code"] == "scheduler_not_configured"
@@ -203,7 +260,10 @@ def test_automations_scheduled_stay_paused(make_user: Any) -> None:
     assert manual["enabled"] is True
     run = api.post(f"/automations/{manual['id']}/run")
     assert run.status_code == 201 and run.json()["status"] == "queued"
-    assert api.post("/automations", {"name": "Bad", "trigger": "manual", **{**base, "template": "Hack"}}).status_code == 422
+    assert (
+        api.post("/automations", {"name": "Bad", "trigger": "manual", **{**base, "template": "Hack"}}).status_code
+        == 422
+    )
 
 
 def test_integrations_cannot_connect_in_phase2(make_user: Any) -> None:
@@ -221,7 +281,11 @@ def test_security_status_is_honest(make_user: Any) -> None:
     s = api.get("/security/status").json()
     assert s["privacy_enforced"] is False
     checks = {c["key"]: c["status"] for c in s["checklist"]}
-    assert checks["csrf"] == "enforced" and checks["tenant_isolation"] == "enforced" and checks["rate_limits"] == "enforced"
+    assert (
+        checks["csrf"] == "enforced"
+        and checks["tenant_isolation"] == "enforced"
+        and checks["rate_limits"] == "enforced"
+    )
     assert checks["malware_scan"] == "not_configured" and checks["egress"] == "not_configured"
     assert checks["session_cookies"] == "partial"  # no Secure flag outside production
 
@@ -250,11 +314,24 @@ def test_production_config_guards(monkeypatch: Any) -> None:
     from app.core.config import Settings
 
     with pytest.raises(ValidationError, match="outbox"):
-        Settings(env="production", app_origin="https://app.example.com", mail_backend="outbox",
-                 database_url="postgresql+psycopg://a:strong@db/x")  # type: ignore[arg-type]
+        Settings(
+            env="production",
+            app_origin="https://app.example.com",
+            mail_backend="outbox",
+            database_url="postgresql+psycopg://a:strong@db/x",
+        )  # type: ignore[arg-type]
     with pytest.raises(ValidationError, match="https"):
-        Settings(env="production", app_origin="http://app.example.com", mail_backend="smtp",
-                 database_url="postgresql+psycopg://a:strong@db/x")  # type: ignore[arg-type]
-    s = Settings(env="production", app_origin="https://app.example.com", mail_backend="smtp", cookie_secure=False,
-                 database_url="postgresql+psycopg://a:strong@db/x")  # type: ignore[arg-type]
+        Settings(
+            env="production",
+            app_origin="http://app.example.com",
+            mail_backend="smtp",
+            database_url="postgresql+psycopg://a:strong@db/x",
+        )  # type: ignore[arg-type]
+    s = Settings(
+        env="production",
+        app_origin="https://app.example.com",
+        mail_backend="smtp",
+        cookie_secure=False,
+        database_url="postgresql+psycopg://a:strong@db/x",
+    )  # type: ignore[arg-type]
     assert s.cookie_secure is True
