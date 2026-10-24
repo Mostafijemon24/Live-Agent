@@ -46,7 +46,7 @@ export const PLANS: Record<PlanKind, RawStep[]> = {
       t: "Send large files to an external AI provider if needed",
       tool: "External AI provider",
       risk: "External transfer",
-      d: "Only if you approve. Blocked by default for Private and Unknown files.",
+      d: "Only if you approve. Blocked by default for Confidential and Unclassified files.",
       approval: true,
     },
   ],
@@ -187,13 +187,13 @@ export interface RawFile {
 }
 
 export const FILES: RawFile[] = [
-  { id: "F1", name: "site-crawl-sample.csv", type: "CSV", size: "1.2 MB", up: "Oct 24, 08:55", status: "Ready", cls: "Private", coll: "Website audits" },
-  { id: "F2", name: "brand-guidelines-sample.pdf", type: "PDF", size: "4.8 MB", up: "Oct 22, 10:14", status: "Ready", cls: "Approved for selected integration", coll: "SEO & content" },
-  { id: "F3", name: "support-tickets-q3-sample.csv", type: "CSV", size: "8.1 MB", up: "Oct 23, 13:28", status: "Failed", cls: "Private", coll: "Support data", err: "Rows have inconsistent columns." },
+  { id: "F1", name: "site-crawl-sample.csv", type: "CSV", size: "1.2 MB", up: "Oct 24, 08:55", status: "Ready", cls: "Confidential", coll: "Website audits" },
+  { id: "F2", name: "brand-guidelines-sample.pdf", type: "PDF", size: "4.8 MB", up: "Oct 22, 10:14", status: "Ready", cls: "Internal", coll: "SEO & content" },
+  { id: "F3", name: "support-tickets-q3-sample.csv", type: "CSV", size: "8.1 MB", up: "Oct 23, 13:28", status: "Failed", cls: "Confidential", coll: "Support data", err: "Rows have inconsistent columns." },
   { id: "F4", name: "competitor-notes-sample.docx", type: "DOCX", size: "640 KB", up: "Oct 24, 08:01", status: "Processing", cls: "Unknown", coll: "Research" },
   { id: "F5", name: "pricing-export-sample.csv", type: "CSV", size: "1.5 MB", up: "Oct 24, 08:01", status: "Scanning", cls: "Unknown", coll: "Research" },
   { id: "F6", name: "press-kit-sample.zip", type: "ZIP", size: "22 MB", up: "Oct 21, 09:40", status: "Quarantined", cls: "Unknown", coll: "SEO & content", err: "Archive contains an executable file." },
-  { id: "F7", name: "form-validator-sample.js", type: "JS", size: "12 KB", up: "Oct 22, 17:15", status: "Ready", cls: "Private", coll: "Code" },
+  { id: "F7", name: "form-validator-sample.js", type: "JS", size: "12 KB", up: "Oct 22, 17:15", status: "Ready", cls: "Confidential", coll: "Code" },
   { id: "F8", name: "public-faq-sample.md", type: "MD", size: "18 KB", up: "Oct 20, 15:30", status: "Ready", cls: "Public", coll: "SEO & content" },
   { id: "F9", name: "meeting-notes-sample.txt", type: "TXT", size: "260 KB", up: "Oct 24, 08:02", status: "Ready", cls: "Unknown", coll: "Research" },
 ];
@@ -218,8 +218,8 @@ export interface RawAutomation {
 }
 
 export const AUTOS: RawAutomation[] = [
-  { id: "AU-3", name: "Weekly site health check", trigger: "Schedule", when: "Every Monday at 08:00", tz: "Asia/Dhaka (GMT+6)", template: "WordPress audit (read-only)", tools: "WordPress (read-only), Browser runtime", cls: "Private files only", policy: "Ask before any change", last: "Never run", next: "Not scheduled — scheduler requires backend", status: "Paused", created: "Oct 22, 10:40" },
-  { id: "AU-2", name: "Monthly SEO summary", trigger: "Schedule", when: "1st of each month at 09:00", tz: "Asia/Dhaka (GMT+6)", template: "SEO report", tools: "Agent analysis, Workspace", cls: "Private files only", policy: "Ask before publishing or sending", last: "Never run", next: "Not scheduled — scheduler requires backend", status: "Paused", created: "Oct 21, 10:00" },
+  { id: "AU-3", name: "Weekly site health check", trigger: "Schedule", when: "Every Monday at 08:00", tz: "Asia/Dhaka (GMT+6)", template: "WordPress audit (read-only)", tools: "WordPress (read-only), Browser runtime", cls: "Private files only", policy: "Ask before any change", last: "Never run", next: "Paused", status: "Paused", created: "Oct 22, 10:40" },
+  { id: "AU-2", name: "Monthly SEO summary", trigger: "Schedule", when: "1st of each month at 09:00", tz: "Asia/Dhaka (GMT+6)", template: "SEO report", tools: "Agent analysis, Workspace", cls: "Private files only", policy: "Ask before publishing or sending", last: "Never run", next: "Paused", status: "Paused", created: "Oct 21, 10:00" },
   { id: "AU-1", name: "Plugin update review", trigger: "Manual", when: "When you start it", tz: "Asia/Dhaka (GMT+6)", template: "Plugin compatibility check", tools: "WordPress (read-only)", cls: "No files", policy: "Ask before any change", last: "Oct 23, 15:10 (demo)", next: "Runs when you start it", status: "Enabled", created: "Oct 20, 09:30" },
 ];
 
@@ -311,7 +311,7 @@ export const RETENTION: { label: string; value: string }[] = [
 export const AI_PROVIDER_POLICY = [
   "Task text may be processed by an AI provider once one is configured.",
   "Files are never sent without a per-action approval.",
-  "Private and Unknown files are blocked from external transfer by default.",
+  "Confidential files need a one-time approval to leave; Unclassified files never leave.",
   "Provider: not configured. Its retention and training policy will be shown here.",
 ].join("\n");
 

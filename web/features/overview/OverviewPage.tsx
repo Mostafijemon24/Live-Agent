@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, DEMO_MODE, errorMessage, isApiError } from "@/lib/api";
-import type { ComponentStatus, Dashboard } from "@/lib/api/types";
+import type { Dashboard } from "@/lib/api/types";
+import { AgentStatusCard } from "@/features/agent/AgentStatusCard";
 import { useSession, useUi } from "@/lib/session";
 import { fmtDateTime, guessType, newIdempotencyKey, suggestTitle } from "@/lib/format";
 import { ACTIVITY_ICON, APPROVAL_CATEGORY, RISK_LEVEL, TASK_NEXT, TASK_STATUS } from "@/lib/labels";
@@ -18,18 +19,6 @@ const EXAMPLES = [
   "Draft a content brief for a local services page",
 ];
 const QUICK_MIN_MSG = "Describe the task in a sentence or two so the Agent can plan it.";
-
-const AGENT_BADGE: Record<ComponentStatus, { label: string; dot: string; fg: string; bg: string }> = {
-  not_connected: { label: "Not connected", dot: "#98A2B3", fg: "#475467", bg: "#F2F4F7" },
-  not_configured: { label: "Not connected", dot: "#98A2B3", fg: "#475467", bg: "#F2F4F7" },
-  degraded: { label: "Degraded", dot: "#B54708", fg: "#B54708", bg: "#FFF6ED" },
-  ok: { label: "Connected", dot: "#16803C", fg: "#16803C", bg: "#ECFDF3" },
-};
-
-const AGENT_INFO_TITLE = "Connecting the Agent";
-const AGENT_INFO_BODY = DEMO_MODE
-  ? "To run real tasks, Phase 3 installs: an AI orchestration service, background workers, a job queue and a policy engine that enforces approvals. Until then, every result here is sample data."
-  : "To run real tasks, Phase 3 installs: an AI orchestration service, background workers, a job queue and a policy engine that enforces approvals. Until then, your tasks are saved securely and queued, but nothing is planned or executed.";
 
 const card = "rounded-[10px] border border-line bg-surface";
 const headLink = "text-[13.5px] font-medium text-primary";
@@ -56,7 +45,7 @@ export function OverviewPage() {
               onClick={() =>
                 notice(
                   "Importing needs the backend",
-                  "Task lists from CSV, Excel or Notion will be parsed and validated on the server once the import service is installed (Phase 3). For now, create tasks one at a time.",
+                  "Bulk import of task lists (CSV, Excel, Notion) is not built yet. Create tasks one at a time.",
                 )
               }
             >
@@ -73,7 +62,7 @@ export function OverviewPage() {
         }
       />
 
-      <AgentStatus status={d?.agent.status} onInfo={() => notice(AGENT_INFO_TITLE, AGENT_INFO_BODY)} />
+      <AgentStatusCard agent={d?.agent} />
 
       {q.isLoading ? (
         <div className={cx(card, "p-5")}>
@@ -96,38 +85,6 @@ export function OverviewPage() {
             </div>
           </div>
         </>
-      )}
-    </div>
-  );
-}
-
-function AgentStatus({ status, onInfo }: { status?: ComponentStatus; onInfo: () => void }) {
-  const b = AGENT_BADGE[status ?? "not_connected"];
-  const connected = status === "ok";
-  const text = connected
-    ? "The AI engine is connected."
-    : DEMO_MODE
-      ? "A demo agent simulates plans and results with sample data. It cannot open any website, file or service until the backend is connected."
-      : "The AI engine is not installed yet (Phase 3). Your tasks are saved and queued, but no plan is prepared and nothing runs until it is connected.";
-  return (
-    <div className={cx(card, "flex flex-wrap items-center gap-4 px-5 py-4")}>
-      <div className="grid h-10 w-10 flex-none place-items-center rounded-[10px] bg-neutral-soft text-ink-3">
-        <Icon name="bot" size={20} />
-      </div>
-      <div className="min-w-0 flex-[1_1_300px]">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <span className="font-semibold">Agent status</span>
-          <span className="inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium" style={{ color: b.fg, background: b.bg }}>
-            <span className="h-[7px] w-[7px] rounded-full" style={{ background: b.dot }} />
-            {b.label}
-          </span>
-        </div>
-        <div className="mt-0.5 text-[13.5px] text-muted [text-wrap:pretty]">{text}</div>
-      </div>
-      {!connected && (
-        <Button size="sm" onClick={onInfo}>
-          What&apos;s needed to connect?
-        </Button>
       )}
     </div>
   );
@@ -384,7 +341,7 @@ function SetupChecklist({ d }: { d: Dashboard }) {
   const items: { key: string; label: string; done: boolean; cta: string; act: () => void; busy?: boolean }[] = [
     { key: "verify", label: "Verify your email", done: s.verify_email, cta: "Verify", act: () => verify.mutate(), busy: verify.isPending },
     { key: "privacy", label: "Choose privacy defaults", done: s.privacy, cta: "Choose", act: () => router.push("/security") },
-    { key: "integ", label: "Connect an integration (backend required)", done: s.integration, cta: "View", act: () => router.push("/integrations") },
+    { key: "integ", label: DEMO_MODE ? "Connect an integration (backend required)" : "Connect WordPress (read-only)", done: s.integration, cta: "View", act: () => router.push("/integrations") },
     {
       key: "task",
       label: DEMO_MODE ? "Run a safe demo task" : "Create your first task",

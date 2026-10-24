@@ -21,7 +21,7 @@ const TITLES: Record<PlanModalKind, string> = {
 const COPY = {
   approved: DEMO_MODE
     ? "Plan approved (simulated). The demo agent does not touch any real system."
-    : "Plan approved and recorded. Nothing ran — the execution engine isn't installed yet.",
+    : "Plan approved. Steps run one by one; any step that needs approval will ask you first.",
   ack: DEMO_MODE
     ? "I understand this is a simulated approval. No step will touch a real system."
     : "I understand approving the plan records my decision; each high-impact step still needs its own approval.",
@@ -32,7 +32,7 @@ const COPY = {
   editNote: DEMO_MODE ? "Demo: the sample plan won't actually change." : "Your request is saved to the task log. The planner uses it to prepare a revised plan.",
   asked: DEMO_MODE
     ? "Question saved to the task log. The demo agent cannot answer — an AI provider is required."
-    : "Question saved to the task log. The Agent can answer once the AI engine is installed (Phase 3).",
+    : "Question saved to the task log. To change the plan, use “Request changes” — the Agent re-plans with your note.",
   cancelled: "Task cancelled. Nothing had run.",
 };
 

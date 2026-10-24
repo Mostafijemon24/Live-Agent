@@ -45,6 +45,7 @@ class ClaimedJob:
     payload: dict[str, Any]
     attempts: int
     max_attempts: int
+    locked_by: str = ""
 
 
 def enqueue(
@@ -61,8 +62,15 @@ def enqueue(
     max_attempts: int = 3,
     delay_seconds: float = 0,
     settings: Settings | None = None,
+    internal: bool = False,
 ) -> uuid.UUID | None:
+    """`internal=True` for follow-up jobs of work already admitted (continuations): they bypass
+    backpressure so a full queue can never force an already-run step to run again."""
     s = settings or get_settings()
+    if internal:
+        return _insert(
+            db, workspace_id, kind, queue, payload, task_id, step_id, dedupe_key, priority, max_attempts, delay_seconds
+        )
     pending_ws = db.execute(
         select(func.count())
         .select_from(Job)
@@ -75,6 +83,24 @@ def enqueue(
     ).scalar_one()
     if pending_all >= s.queue_max_pending_total:
         raise QueueFull("The agent is busy right now. Try again in a few minutes.")
+    return _insert(
+        db, workspace_id, kind, queue, payload, task_id, step_id, dedupe_key, priority, max_attempts, delay_seconds
+    )
+
+
+def _insert(
+    db: Session,
+    workspace_id: uuid.UUID,
+    kind: str,
+    queue: JobQueue,
+    payload: dict[str, Any] | None,
+    task_id: uuid.UUID | None,
+    step_id: uuid.UUID | None,
+    dedupe_key: str | None,
+    priority: int,
+    max_attempts: int,
+    delay_seconds: float,
+) -> uuid.UUID | None:
     stmt = (
         insert(Job)
         .values(
@@ -135,6 +161,7 @@ def claim(db: Session, queue: JobQueue, worker_id: str, settings: Settings | Non
         payload=dict(row.payload or {}),
         attempts=row.attempts,
         max_attempts=row.max_attempts,
+        locked_by=worker_id[:120],
     )
 
 
@@ -149,12 +176,26 @@ def heartbeat(db: Session, job_id: uuid.UUID, worker_id: str) -> bool:
     return bool(r.rowcount)  # type: ignore[attr-defined]
 
 
-def complete(db: Session, job_id: uuid.UUID) -> None:
-    db.execute(
+def still_owned(db: Session, job: ClaimedJob) -> bool:
+    """True if this worker still holds the job (not recovered/cancelled meanwhile). Locks the row."""
+    row = db.execute(
+        select(Job.id)
+        .where(Job.id == job.id, Job.status == JobStatus.running.value, Job.locked_by == job.locked_by)
+        .with_for_update()
+    ).first()
+    return row is not None
+
+
+def complete(db: Session, job_id: uuid.UUID, worker_id: str | None = None) -> bool:
+    conds = [Job.id == job_id, Job.status == JobStatus.running.value]
+    if worker_id is not None:
+        conds.append(Job.locked_by == worker_id[:120])
+    r = db.execute(
         update(Job)
-        .where(Job.id == job_id, Job.status == JobStatus.running.value)
+        .where(*conds)
         .values(status=JobStatus.succeeded.value, finished_at=func.now(), locked_by=None, last_error=None)
     )
+    return bool(r.rowcount)  # type: ignore[attr-defined]
 
 
 def backoff_seconds(attempt: int, settings: Settings | None = None) -> float:
@@ -184,7 +225,12 @@ def fail(
         values["run_after"] = run_after
     else:
         values["finished_at"] = func.now()
-    db.execute(update(Job).where(Job.id == job.id, Job.status == JobStatus.running.value).values(**values))
+    conds = [Job.id == job.id, Job.status == JobStatus.running.value]
+    if job.locked_by:
+        conds.append(Job.locked_by == job.locked_by)
+    r = db.execute(update(Job).where(*conds).values(**values))
+    if not r.rowcount:  # type: ignore[attr-defined]
+        return "lost"  # recovered or cancelled meanwhile: someone else owns it now
     return status
 
 

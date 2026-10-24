@@ -42,19 +42,19 @@ const NOTIF_RULES: [keyof NotificationPrefs, string][] = [
 ];
 
 const AI_RULES: [keyof AiRules, string, string][] = [
-  ["share", "Ask before sharing outside the workspace", "Any file or text sent to an outside service needs your approval."],
+  ["share", "Ask before sharing outside the workspace", "In custom privacy mode, turning this off lets public and internal data go to the configured AI model without asking. Confidential data always asks."],
   ["publish", "Ask before publishing or sending", "Covers website posts, emails and messages."],
-  ["prod", "Ask before changing live systems", "Live website, store or database changes."],
-  ["del", "Ask before deleting files or records", "Each deletion needs its own approval listing the exact items."],
-  ["folders", "Restrict work to selected folders", "The Agent only reads collections you choose."],
+  ["prod", "Ask before changing live systems", "Always on in practice: production changes always need approval."],
+  ["del", "Ask before deleting files or records", "Always on in practice: each deletion needs its own approval listing the exact items."],
+  ["folders", "Restrict work to selected folders", "Saved preference. Today the Agent reads only files attached to the task."],
 ];
 
 const TOOL_PERMS: [keyof ToolPermissions, string][] = [
   ["wp_read", "Read WordPress content"],
-  ["wp_write", "Change WordPress content (always with approval)"],
-  ["browser", "Use the isolated browser on allowlisted domains"],
-  ["email", "Send email (always with approval)"],
-  ["external", "Use an external AI provider for files (always with approval)"],
+  ["wp_write", "Change WordPress content (not built yet)"],
+  ["browser", "Read web pages on allowed domains (inspection and SEO audit)"],
+  ["email", "Send email (not built yet)"],
+  ["external", "Allow sending data to an external AI model (each transfer still checked; confidential data asks)"],
 ];
 
 const NOT_EDITABLE = "Only workspace owners and admins can change this.";
@@ -142,7 +142,7 @@ function useSave<I>(fn: (input: I) => Promise<Settings>, opts: { policy?: boolea
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       for (const k of opts.extraKeys ?? []) qc.invalidateQueries({ queryKey: k });
       if (DEMO_MODE) toast("Saved for this browser session only. Nothing is sent to a server.", "success");
-      else toast(opts.policy && !res.enforced ? "Saved. Not enforced yet (Phase 3)." : "Saved.", "success");
+      else toast(opts.policy && !res.enforced ? "Saved. Not enforced on this server." : opts.policy ? "Saved. The policy engine uses this from the next step on." : "Saved.", "success");
     },
     onError: (e) => {
       if (!(isApiError(e) && Object.keys(e.fieldErrors()).length)) toast(errorMessage(e), "danger");
@@ -234,7 +234,7 @@ function WorkspaceSection({ s }: { s: Settings }) {
         <Field
           label="Allowed domains for browser tasks"
           error={domErr}
-          hint={s.enforced ? "Comma-separated. Every other domain is blocked." : "Comma-separated. Once the policy engine is installed (Phase 3), every other domain is blocked."}
+          hint={s.enforced ? "Comma-separated. The Agent can reach only these domains (and their subdomains); every other domain is blocked." : "Comma-separated."}
         >
           {(id, d) => (
             <TextInput
@@ -291,10 +291,10 @@ function AiSection({ s }: { s: Settings }) {
       </H2>
       <p className="mb-3 text-[13.5px] text-muted [text-wrap:pretty]">
         {s.enforced
-          ? "These rules are enforced by the policy engine on every step."
+          ? "The policy engine reads these before every step. The “ask before” rules can only make it stricter: actions that always need approval (publishing, sending, deleting, production changes, code, confidential data leaving) keep needing it even if a switch is off."
           : DEMO_MODE
-            ? "Your preferences. The backend policy engine must enforce them — these switches alone are not a security boundary."
-            : "Your preferences are saved. The policy engine (Phase 3) must enforce them — these switches alone are not a security boundary."}
+            ? "Your preferences for this demo session. In the real app the server's policy engine enforces them."
+            : "Your preferences are saved, but this server reports they are not enforced."}
       </p>
       {!can && <ReadOnlyNote />}
       {AI_RULES.map(([k, l, d]) => (
@@ -477,7 +477,7 @@ export function SettingsPage() {
           {DEMO_MODE
             ? "Changes are kept for this browser session only."
             : q.data && !q.data.enforced
-              ? "Changes are saved to your account. Policy settings are not enforced until Phase 3."
+              ? "Changes are saved to your account, but this server reports policy settings are not enforced."
               : "Changes are saved to your account."}
         </p>
       </div>

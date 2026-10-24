@@ -181,6 +181,8 @@ class TaskStepOut(Out):
     # Phase 3 (server-derived; optional so older clients keep working)
     step_key: str = ""
     tool_id: str | None = None
+    args: dict[str, Any] = Field(default_factory=dict)  # exact validated arguments the approval binds
+    args_hash: str | None = None
     impact: str = "none"
     classifications: list[str] = Field(default_factory=list)
     destinations: list[str] = Field(default_factory=list)
@@ -667,6 +669,45 @@ class SettingsOut(Out):
     enforced: bool
 
 
+# Domains under which anyone can host a site: allowlisting one would allow every site under it.
+SHARED_SUFFIXES = frozenset(
+    {
+        "co.uk",
+        "org.uk",
+        "com.au",
+        "co.in",
+        "com.bd",
+        "co.jp",
+        "com.br",
+        "co.nz",
+        "co.za",
+        "github.io",
+        "gitlab.io",
+        "herokuapp.com",
+        "vercel.app",
+        "netlify.app",
+        "pages.dev",
+        "web.app",
+        "firebaseapp.com",
+        "appspot.com",
+        "blogspot.com",
+        "wordpress.com",
+        "wixsite.com",
+        "squarespace.com",
+        "cloudfront.net",
+        "azurewebsites.net",
+        "s3.amazonaws.com",
+        "amazonaws.com",
+        "onrender.com",
+        "fly.dev",
+        "workers.dev",
+        "ngrok.io",
+        "ngrok-free.app",
+        "replit.app",
+        "glitch.me",
+    }
+)
+
 TIMEZONES = ("Asia/Dhaka", "UTC", "Europe/London", "America/New_York")
 _DOMAIN = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
@@ -728,6 +769,10 @@ class WorkspaceSettingsIn(In):
                 continue
             if not _DOMAIN.match(d):
                 raise ValueError(f"'{d[:60]}' is not a valid domain name.")
+            if d in SHARED_SUFFIXES:
+                raise ValueError(
+                    f"'{d}' is shared by many unrelated sites. Add your own site's domain instead (e.g. mysite.{d})."
+                )
             out.append(d)
         return list(dict.fromkeys(out))
 

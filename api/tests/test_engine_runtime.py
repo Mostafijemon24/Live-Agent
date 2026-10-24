@@ -262,12 +262,24 @@ def test_mock_provider_and_insecure_egress_are_refused_in_production() -> None:
         trust_proxy_headers=True,
     )
     with pytest.raises(ValueError, match="mock"):
-        Settings(**base, model_provider="mock")
+        Settings(_env_file=None, **base, model_provider="mock")
     with pytest.raises(ValueError, match="https"):
-        Settings(**base, model_provider="openai_compatible", model_base_url="http://api.example.com/v1", model_name="m")
+        Settings(
+            _env_file=None,
+            **base,
+            model_provider="openai_compatible",
+            model_base_url="http://api.example.com/v1",
+            model_name="m",
+        )
     with pytest.raises(ValueError, match="EGRESS"):
-        Settings(**base, egress_allow_private_networks=True)
-    Settings(**base, model_provider="openai_compatible", model_base_url="https://api.example.com/v1", model_name="m")
+        Settings(_env_file=None, **base, egress_allow_private_networks=True)
+    Settings(
+        _env_file=None,
+        **base,
+        model_provider="openai_compatible",
+        model_base_url="https://api.example.com/v1",
+        model_name="m",
+    )
 
 
 class _FakeOpenAI:
@@ -383,7 +395,7 @@ def test_subdomains_of_allowed_domains_are_allowed() -> None:
 
 @pytest.mark.parametrize(
     "ip",
-    ["127.0.0.1", "10.0.0.8", "169.254.169.254", "192.168.1.1", "::1", "0.0.0.0", "::ffff:127.0.0.1"],  # noqa: S104
+    ["127.0.0.1", "10.0.0.8", "169.254.169.254", "192.168.1.1", "::1", "0.0.0.0", "::ffff:127.0.0.1", "fec0::1"],  # noqa: S104
 )
 def test_private_and_metadata_addresses_are_blocked(ip: str) -> None:
     pol = EgressPolicy(allowed_hosts=frozenset({ip}))
@@ -433,7 +445,27 @@ def test_redaction_removes_common_secrets(secret: str) -> None:
 def test_redaction_keeps_ordinary_text_and_json_valid() -> None:
     assert redact("Order 1234 shipped on 2026-10-24.").count == 0
     out = redact(json.dumps({"p": "token: abc123secret, more"})).text
-    assert json.loads(out)["p"].startswith("token=[REDACTED]")
+    assert json.loads(out)["p"].startswith("token: [REDACTED]")
+
+
+@pytest.mark.parametrize(
+    "text_in",
+    [
+        "DB_PASSWORD=hunter2",
+        '{"password": "hunter2xyz"}',
+        json.dumps(json.dumps({"api_key": "abcdef123456"})),
+        "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG",
+        "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+        "client_secret: 'ab12cd34ef'",
+    ],
+)
+def test_redaction_formats_from_review(text_in: str) -> None:
+    """P3-SR-3 regression."""
+    out = redact(text_in).text
+    for secret in ("hunter2", "abcdef123456", "wJalrXUtnFEMI", "dXNlcjpwYXNzd29yZA", "ab12cd34ef"):
+        assert secret not in out, out
+    if text_in.startswith(("{", '"')):
+        json.loads(out)  # still valid JSON
 
 
 # ---------------------------------------------------------------- sandbox
@@ -529,3 +561,249 @@ def test_due_automation_runs_once_per_slot(make_user: Any, engine: Any, owner_en
     assert len(tasks) == 1 and tasks[0]["title"] == "Weekly SEO" and tasks[0]["status"] == "queued"
     engine.drain()
     assert api.get(f"/tasks/{tasks[0]['id']}").json()["status"] == "awaiting_approval"  # plans, never runs alone
+
+
+def test_sandbox_cannot_unmount_its_masks_or_remount_root() -> None:
+    """P3-SR-1 regression: masks must be locked, the program must hold no capabilities."""
+    from app.core.config import get_settings
+    from app.engine.sandbox import _hidden_paths, run_python
+
+    _sandbox_or_skip()
+    hidden = _hidden_paths(get_settings())
+    code = (
+        "import ctypes, os\n"
+        "libc = ctypes.CDLL(None, use_errno=True)\n"
+        f"paths = {hidden!r}\n"
+        "for p in paths:\n"
+        "    r = libc.umount2(p.encode(), 2)\n"
+        "    print('UMOUNTED' if r == 0 else 'denied', p)\n"
+        "r = libc.mount(b'none', b'/', None, 32 | 4096, None)\n"  # MS_REMOUNT|MS_BIND
+        "print('REMOUNT' if r == 0 else 'denied-remount')\n"
+        "print('uid', os.getuid())\n"
+        "for p in paths:\n"
+        "    print('LEAK' if os.path.exists(p) and os.listdir(p) else 'empty', p)\n"
+        "print(open('/proc/self/status').read().split('CapEff:')[1].split()[0])\n"
+    )
+    r = run_python(code)
+    out = r.stdout
+    assert "UMOUNTED" not in out and "REMOUNT\n" not in out and "LEAK" not in out, out
+    assert out.strip().splitlines()[-1] == "0000000000000000", out  # no effective capabilities
+
+
+def test_sandbox_output_flood_and_fork_bomb_are_contained() -> None:
+    """P3-SR-6 regression."""
+    import resource as _r
+
+    from app.engine.sandbox import run_python
+
+    _sandbox_or_skip()
+    before = _r.getrusage(_r.RUSAGE_CHILDREN).ru_maxrss
+    r = run_python("import sys\nwhile True: sys.stdout.write('x' * 1000000)")
+    assert r.truncated is True and len(r.stdout) <= Settings().sandbox_max_output_bytes
+    assert r.duration_ms < 5000  # killed as soon as the cap was exceeded, not at the timeout
+    del before
+    import os as _os
+
+    if _os.geteuid() == 0:
+        pytest.skip("RLIMIT_NPROC is not enforced for real root; the production worker runs as a non-root user")
+    bomb = run_python(
+        "import os\nn = 0\nfor _ in range(200):\n    try:\n        pid = os.fork()\n    except OSError:\n        break\n"
+        "    if pid == 0:\n        import time; time.sleep(3); os._exit(0)\n    n += 1\nprint(n)"
+    )
+    assert int(bomb.stdout.strip() or 0) < 100, bomb
+
+
+# ---------------------------------------------------------------- review regressions (P3-SR-4, P3-SR-9)
+def test_only_the_owning_worker_can_finish_a_job(make_user: Any, engine: Any, owner_engine: Any) -> None:
+    api = make_user()
+    with engine.worker_factory() as db:
+        Q.enqueue(db, workspace_id=_ws(api), kind="x", queue=JobQueue.tools, settings=engine.settings)
+        db.commit()
+        job = Q.claim(db, JobQueue.tools, "worker-A", engine.settings)
+    assert job is not None
+    with owner_engine.begin() as c:  # lease expired and another worker took it over
+        c.execute(text("UPDATE jobs SET locked_by = 'worker-B' WHERE id = :j"), {"j": job.id})
+    with engine.worker_factory() as db:
+        assert Q.complete(db, job.id, "worker-A") is False
+        assert Q.fail(db, job, "late", retryable=True, settings=engine.settings) == "lost"
+        assert Q.still_owned(db, job) is False
+        db.commit()
+    with owner_engine.connect() as c:
+        assert c.execute(text("SELECT status FROM jobs WHERE id = :j"), {"j": job.id}).scalar_one() == "running"
+
+
+def test_stale_tool_job_owner_does_not_run_the_step(make_user: Any, engine: Any, site: Any, owner_engine: Any) -> None:
+    from app.engine import runner
+    from tests.conftest import set_workspace
+
+    site.add("/", "<title>x</title>")
+    api = make_user()
+    set_workspace(owner_engine, api, allowed_domains=["127.0.0.1"], privacy_mode="approval")
+    t = create_task(api, f"Inspect {site.url}/ and write a report.")
+    engine.drain()
+    t = api.get(f"/tasks/{t['id']}").json()
+    api.post(f"/tasks/{t['id']}/plan/approve", {"selected_step_ids": [s["id"] for s in t["plan"]["steps"]]})
+    engine.orchestrator.run_once()  # queues the tool job
+    with engine.worker_factory() as db:
+        job = Q.claim(db, JobQueue.tools, "worker-A", engine.settings)
+    assert job is not None and job.kind == "tool.run"
+    with owner_engine.begin() as c:
+        c.execute(text("UPDATE jobs SET locked_by = 'worker-B' WHERE id = :j"), {"j": job.id})
+    with engine.worker_factory() as db:
+        runner.handle_tool_run(db, job, engine.settings, engine.worker_factory)
+        db.commit()
+    assert site.hits == []
+
+
+def test_internal_follow_up_jobs_bypass_backpressure(make_user: Any, engine: Any) -> None:
+    api = make_user()
+    s = engine.settings.model_copy(update={"queue_max_pending_per_workspace": 0})
+    with engine.worker_factory() as db:
+        with pytest.raises(Q.QueueFull):
+            Q.enqueue(db, workspace_id=_ws(api), kind="x", queue=JobQueue.tools, settings=s)
+        assert Q.enqueue(db, workspace_id=_ws(api), kind="x", queue=JobQueue.tools, settings=s, internal=True)
+        db.rollback()
+
+
+def test_retry_reverifies_approval_except_consumption(make_user: Any, owner_engine: Any) -> None:
+    from sqlalchemy import select
+
+    from app.engine.policy import POLICY_VERSION
+    from app.models import ApprovalRequest, DeletionRequest
+    from app.services.approvals import deletion_extra, verify_binding
+    from tests.conftest import upload
+
+    api = make_user()
+    f = upload(api, "r.csv").json()
+    a = api.post(f"/files/{f['id']}/deletion-request", {"reason": "cleanup"}).json()
+    api.post(
+        f"/approvals/{a['id']}/decision", {"decision": "approve", "acknowledged": True, "confirmed_items": ["r.csv"]}
+    )
+    with owner_engine.begin() as c:
+        c.execute(text("UPDATE approval_requests SET execution_state = 'executed' WHERE id = :a"), {"a": a["id"]})
+
+    def check(**extra: Any) -> str | None:
+        with Session(owner_engine) as db:
+            row = db.get(ApprovalRequest, uuid.UUID(a["id"]))
+            dr = db.execute(select(DeletionRequest).where(DeletionRequest.approval_id == row.id)).scalar_one()  # type: ignore[union-attr]
+            return verify_binding(
+                db,
+                row,
+                workspace_id=_ws(api),
+                operation="deletion.execute",
+                args_hash=row.args_hash,  # type: ignore[union-attr,arg-type]
+                targets=list(row.targets),
+                step_id=None,
+                policy_version=POLICY_VERSION,  # type: ignore[union-attr]
+                extra_hash=deletion_extra(dr),
+                **extra,
+            )
+
+    assert check() == "approval was already used or invalidated"
+    assert check(allow_consumed=True) is None
+    with owner_engine.begin() as c:
+        c.execute(
+            text("UPDATE workspace_memberships SET role = 'member' WHERE user_id = :u"), {"u": api.me["user"]["id"]}
+        )
+    assert "no longer an owner" in (check(allow_consumed=True) or "")
+
+
+def test_internal_errors_are_not_shown_to_users(
+    make_user: Any, engine: Any, owner_engine: Any, monkeypatch: Any
+) -> None:
+    from app.engine import orchestrator
+
+    def boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("password=hunter2 at /srv/app/secret_module.py line 9")
+
+    monkeypatch.setattr(orchestrator, "handle_plan", boom)
+    api = make_user()
+    t = create_task(api, "Write a report about nothing in particular please.")
+    engine.drain()
+    t = api.get(f"/tasks/{t['id']}").json()
+    assert t["status"] == "failed"
+    assert "hunter2" not in (t["error_message"] or "") and "secret_module" not in (t["error_message"] or "")
+    assert "reference" in t["error_message"]
+    with owner_engine.connect() as c:
+        last = c.execute(
+            text("SELECT last_error FROM jobs WHERE task_id = :t AND kind = 'task.plan'"), {"t": t["id"]}
+        ).scalar_one()
+    assert "RuntimeError" in last  # kept for operators
+
+
+def test_slow_drip_response_hits_the_overall_deadline(engine: Any) -> None:
+    """P3-SR-8 regression."""
+    import time as _t
+
+    class Slow(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            for _ in range(20):
+                self.wfile.write(b"x")
+                self.wfile.flush()
+                _t.sleep(0.4)
+
+        def log_message(self, *a: Any) -> None:
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    s = engine.settings.model_copy(update={"egress_timeout_seconds": 1.0})
+    pol = EgressPolicy(
+        allowed_hosts=frozenset({"127.0.0.1"}), allow_private=True, allow_http=True, allowed_ports=frozenset({port})
+    )
+    started = _t.monotonic()
+    from app.engine.egress import EgressFailed
+
+    with pytest.raises(EgressFailed) as e:
+        EgressClient(pol, s).get(f"http://127.0.0.1:{port}/")
+    assert e.value.code == "timeout" and _t.monotonic() - started < 4
+    srv.shutdown()
+
+
+def test_answer_cannot_skip_a_pending_approval(make_user: Any, engine: Any, site: Any, owner_engine: Any) -> None:
+    """P3-SR-7 regression."""
+    from tests.conftest import set_workspace
+
+    site.add("/", "<title>x</title>")
+    api = make_user()
+    set_workspace(owner_engine, api, allowed_domains=["127.0.0.1"], privacy_mode="strict")
+    t = create_task(api, f"Inspect {site.url}/ and write a report.")
+    engine.drain()
+    t = api.get(f"/tasks/{t['id']}").json()
+    api.post(f"/tasks/{t['id']}/plan/approve", {"selected_step_ids": [s["id"] for s in t["plan"]["steps"]]})
+    engine.drain()
+    assert api.get(f"/tasks/{t['id']}").json()["waiting_for"] == "approval"
+    r = api.post(f"/tasks/{t['id']}/messages", {"text": "just continue", "kind": "answer"})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "waiting_for_approval"
+
+
+def test_shared_hosting_suffixes_cannot_be_allowlisted(make_user: Any) -> None:
+    api = make_user()
+    for d in ("github.io", "co.uk", "vercel.app"):
+        assert api.patch("/workspace/settings", {"allowed_domains": [d]}).status_code == 422
+    assert api.patch("/workspace/settings", {"allowed_domains": ["mysite.github.io"]}).status_code == 200
+
+
+def test_storage_key_must_belong_to_the_workspace(make_user: Any, owner_engine: Any) -> None:
+    """P3-SR-11: a row pointing at another tenant's storage prefix is never served."""
+    from tests.conftest import upload
+
+    a, b = make_user(), make_user()
+    fa = upload(a, "a.csv").json()
+    fb = upload(b, "b.csv").json()
+    with owner_engine.begin() as c:
+        key_b = c.execute(text("SELECT storage_key FROM files WHERE id = :f"), {"f": fb["id"]}).scalar_one()
+        foreign = key_b.split("/")[0] + "/" + "e" * 32
+        c.execute(text("UPDATE files SET storage_key = :k WHERE id = :f"), {"k": foreign, "f": fa["id"]})
+    import shutil
+
+    from app.core.config import get_settings
+
+    root = get_settings().storage_dir
+    shutil.copy(root / key_b, root / foreign)  # a real object exists under the other tenant's prefix
+    r = a.get(f"/files/{fa['id']}/download")
+    assert r.status_code == 410 and r.content != b"a,b\n1,2\n"

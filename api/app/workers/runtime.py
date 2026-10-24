@@ -114,12 +114,23 @@ class Worker:
     def process(self, job: Q.ClaimedJob) -> str:
         handler = self.handlers.get(job.kind)
         stop_beat = threading.Event()
+        lost = threading.Event()  # set when we may no longer own the job
 
         def beat() -> None:
             interval = max(1.0, self.settings.job_lease_seconds / 4)
+            failures = 0
             while not stop_beat.wait(interval):
-                with self.factory() as hb:
-                    if not Q.heartbeat(hb, job.id, self.id):
+                try:
+                    with self.factory() as hb:
+                        if not Q.heartbeat(hb, job.id, self.id):
+                            lost.set()
+                            return
+                    failures = 0
+                except Exception:
+                    failures += 1
+                    log.warning("heartbeat failed for job %s (%s)", job.id, failures)
+                    if failures * interval >= self.settings.job_lease_seconds / 2:
+                        lost.set()  # the lease may expire: the result must not be recorded
                         return
 
         hb_thread = threading.Thread(target=beat, daemon=True)
@@ -131,8 +142,12 @@ class Worker:
                     if handler is None:
                         raise LookupError(f"no handler for job kind {job.kind!r} on the {self.kind} queue")
                     handler(db, job)
-                    Q.complete(db, job.id)
-                    db.commit()
+                    if lost.is_set() or not Q.complete(db, job.id, self.id):
+                        db.rollback()
+                        log.warning("job %s lost its lease; result discarded", job.id)
+                        outcome = "lost"
+                    else:
+                        db.commit()
                 except RetryLater as e:
                     db.rollback()
                     outcome = self._failed(job, f"retry: {e}", retryable=True)
@@ -142,7 +157,13 @@ class Worker:
                 except Exception as e:
                     db.rollback()
                     log.exception("job %s (%s) failed", job.id, job.kind)
-                    outcome = self._failed(job, f"{type(e).__name__}: {str(e)[:300]}", retryable=True)
+                    # Internal details stay in jobs.last_error and the logs; users see a reference only.
+                    outcome = self._failed(
+                        job,
+                        f"{type(e).__name__}: {str(e)[:300]}",
+                        retryable=True,
+                        public_error=f"internal error (reference: job {job.id})",
+                    )
         finally:
             stop_beat.set()
             hb_thread.join(timeout=2)
@@ -152,12 +173,12 @@ class Worker:
             self.failed += 1
         return outcome
 
-    def _failed(self, job: Q.ClaimedJob, error: str, retryable: bool) -> str:
+    def _failed(self, job: Q.ClaimedJob, error: str, retryable: bool, public_error: str | None = None) -> str:
         with self.factory() as db:
             status = Q.fail(db, job, error, retryable=retryable, settings=self.settings)
             if status in ("dead", "failed"):
                 try:
-                    self.on_dead(db, job, error)
+                    self.on_dead(db, job, public_error or error)
                 except Exception:
                     log.exception("dead-letter handler failed for job %s", job.id)
                     db.rollback()

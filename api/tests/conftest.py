@@ -58,6 +58,14 @@ os.environ.update(
         "STORAGE_DIR": str(_tmp / "storage"),
         "MAIL_OUTBOX_DIR": str(_tmp / "outbox"),
         "MAIL_BACKEND": "outbox",
+        # Pin engine settings so a developer's api/.env cannot change test behaviour.
+        "MODEL_PROVIDER": "none",
+        "MODEL_LOCATION": "external",
+        "EGRESS_ALLOW_PRIVATE_NETWORKS": "false",
+        "EGRESS_ALLOW_HTTP": "false",
+        "SANDBOX_ENABLED": "true",
+        "WORKER_DATABASE_URL": "",  # tests pass role engines explicitly
+        "DELETION_DATABASE_URL": "",
         "RATE_LIMIT_ENABLED": "true",
         # Each test client sends its own X-Real-IP, as Caddy sets it for each real client.
         "TRUST_PROXY_HEADERS": "true",

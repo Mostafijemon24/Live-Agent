@@ -211,7 +211,8 @@ def create_task(ctx: Context, body: S.CreateTaskIn, idempotency_key: str | None)
 def _suggest_title(prompt: str) -> str:
     import re
 
-    words = re.sub(r"[^\w\s&'-]", "", prompt).split()
+    prompt = re.sub(r"https?://([^/\s:]+)\S*", r"\1", prompt)  # keep only the host of URLs
+    words = re.sub(r"[^\w\s&'.-]", "", prompt).split()
     t = " ".join(words[:7])
     return (t[:1].upper() + t[1:] + ("…" if len(words) > 7 else "")) or "Untitled task"
 
@@ -334,6 +335,12 @@ def message(ctx: Context, task_id: uuid.UUID, text: str, kind: str) -> S.TaskOut
     )
     if kind == "answer":
         require_action(status, "answer", has_plan)
+        if t.waiting_for == WaitingFor.approval.value:
+            raise ApiError(
+                409,
+                "waiting_for_approval",
+                "This task is waiting for an approval decision, not an answer. Decide it on the Approvals page.",
+            )
         add_event(ctx, t, "task.message", f"Your answer: {text}", "note")
         t.question = None
         transition(ctx, t, TaskStatus.queued, "Answer received — continuing", WaitingFor.execution_engine)

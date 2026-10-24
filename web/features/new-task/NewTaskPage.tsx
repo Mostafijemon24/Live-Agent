@@ -17,14 +17,18 @@ const P = "#3448C5";
 const chip = (on: boolean) => ({ bg: on ? "#EEF1FC" : "#FFFFFF", bd: on ? P : "#E4E7EC", fg: on ? P : "#344054", box: on ? P : "#FFFFFF" });
 
 type SourceKey = "none" | "workspace_file" | "imported_csv" | "wordpress";
-const SOURCES: { key: SourceKey; label: string; disabled: boolean }[] = [
-  { key: "none", label: "No source", disabled: false },
-  { key: "workspace_file", label: "Workspace file", disabled: false },
-  { key: "imported_csv", label: "Imported CSV (backend required)", disabled: true },
-  DEMO_MODE
-    ? { key: "wordpress", label: "WordPress (demo)", disabled: false }
-    : { key: "wordpress", label: "WordPress — not connected (Phase 3)", disabled: true },
-];
+function sources(wpConnected: boolean): { key: SourceKey; label: string; disabled: boolean }[] {
+  return [
+    { key: "none", label: "No source", disabled: false },
+    { key: "workspace_file", label: "Workspace file", disabled: false },
+    { key: "imported_csv", label: "Imported CSV (not built yet)", disabled: true },
+    DEMO_MODE
+      ? { key: "wordpress", label: "WordPress (demo)", disabled: false }
+      : wpConnected
+        ? { key: "wordpress", label: "WordPress (read-only)", disabled: false }
+        : { key: "wordpress", label: "WordPress — connect it on the Integrations page first", disabled: true },
+  ];
+}
 
 const isType = (v: string | null): v is TaskType => !!v && TASK_TYPES.some((t) => t.value === v);
 
@@ -61,6 +65,9 @@ export function NewTaskPage() {
 
   const files = useQuery({ queryKey: ["files", { status: "ready" }], queryFn: () => api.listFiles({ status: "ready" }) });
   const limits = useQuery({ queryKey: ["upload-limits"], queryFn: () => api.uploadLimits(), staleTime: 300_000 });
+  const integrations = useQuery({ queryKey: ["integrations"], queryFn: () => api.listIntegrations(), enabled: !DEMO_MODE });
+  const wpConnected = !!integrations.data?.some((i) => i.key === "wordpress" && i.status === "connected");
+  const SOURCES = sources(wpConnected);
 
   const create = useMutation({
     mutationFn: (input: CreateTaskInput) => {
@@ -92,7 +99,7 @@ export function NewTaskPage() {
       setErrs({ prompt: MIN_MSG });
       return;
     }
-    const integration_key = DEMO_MODE && (source === "wordpress" || type === "website") ? "wordpress" : null;
+    const integration_key = source === "wordpress" && (DEMO_MODE || wpConnected) ? "wordpress" : DEMO_MODE && type === "website" ? "wordpress" : null;
     create.mutate({
       prompt: p,
       title: title.trim() || suggestTitle(p),
@@ -208,7 +215,7 @@ export function NewTaskPage() {
                         {m.label}
                         {m.disabled && (
                           <span className="rounded-[5px] bg-warning-soft px-[7px] py-px text-[11.5px] font-medium text-warning">
-                            {DEMO_MODE ? "Backend required" : "Phase 3"}
+                            {DEMO_MODE ? "Backend required" : "Unavailable"}
                           </span>
                         )}
                       </span>

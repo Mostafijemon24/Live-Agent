@@ -17,7 +17,7 @@ const FAQ: [string, string][] = [
   [
     "What can the Agent access?",
     "Only the places you allow: files you add to this workspace, tools you connect, and websites on your allowlist. Everything else is off-limits. " +
-      (DEMO_MODE ? "In this prototype, the Agent can access nothing real." : "Right now the AI engine isn't installed, so the Agent can't access anything yet."),
+      (DEMO_MODE ? "In this prototype, the Agent can access nothing real." : "It can only use the tools listed on the Integrations page, reach domains on your allowed list, and read files attached to the task."),
   ],
   [
     "When does data leave my workspace?",
@@ -35,7 +35,7 @@ const FAQ: [string, string][] = [
     "What happens when I delete a file?",
     DEMO_MODE
       ? "Deletion needs its own approval listing the exact file. Once the backend is connected, deleted files are kept for the retention period and then removed permanently."
-      : "Deletion needs its own approval listing the exact file. Approving records your decision, but nothing is deleted yet — deletion runs once the execution engine is installed (Phase 3), and then follows the retention period.",
+      : "Deletion needs its own approval listing the exact file. A separate deletion service re-checks the file right before deleting and refuses if it changed. Deleted files can be restored from Files → Recently deleted during the retention period, then they are removed for good.",
   ],
 ];
 

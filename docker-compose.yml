@@ -41,6 +41,14 @@ x-hardening: &hardening
   cap_drop: ["ALL"]
   security_opt: ["no-new-privileges:true"]
 
+# Workers serve no HTTP: healthy = this container's worker row heart-beat within the last minute.
+x-worker-health: &worker-health
+  test: ["CMD", "python", "-m", "app.workers.health"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
+
 x-worker-env: &worker-env
   ENV: ${APP_ENV}
   APPROVAL_SIGNING_KEY: ${APPROVAL_SIGNING_KEY}
@@ -106,6 +114,7 @@ services:
     build: ./api
     command: ["python", "-m", "app.workers", "orchestrator"]
     restart: unless-stopped
+    healthcheck: *worker-health
     environment:
       <<: [*worker-env, *model-env]
     <<: *hardening
@@ -118,6 +127,7 @@ services:
     build: ./api
     command: ["python", "-m", "app.workers", "tools"]
     restart: unless-stopped
+    healthcheck: *worker-health
     environment:
       <<: [*worker-env, *model-env]
       # Code execution needs Linux user namespaces, which Docker's default seccomp profile blocks.
@@ -139,6 +149,7 @@ services:
     build: ./api
     command: ["python", "-m", "app.workers", "deletion"]
     restart: unless-stopped
+    healthcheck: *worker-health
     environment:
       <<: *worker-env
       DELETION_DATABASE_URL: postgresql+psycopg://steward_deleter:${STEWARD_DELETER_PASSWORD}@db:5432/steward
@@ -156,6 +167,7 @@ services:
     build: ./api
     command: ["python", "-m", "app.workers", "scheduler"]
     restart: unless-stopped
+    healthcheck: *worker-health
     environment: *worker-env
     <<: *hardening
     networks: [backend]

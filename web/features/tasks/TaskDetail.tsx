@@ -152,7 +152,7 @@ function TaskView({ task }: { task: Task }) {
     mutationFn: () => api.resumeTask(task.id),
     onSuccess: (t) => {
       settle(t);
-      toast(DEMO_MODE ? "Task resumed (simulated)." : "Task resumed. Nothing runs until the execution engine is installed (Phase 3).", "info");
+      toast(DEMO_MODE ? "Task resumed (simulated)." : "Task resumed. The next step will start shortly.", "info");
     },
     onError,
   });
@@ -177,7 +177,7 @@ function TaskView({ task }: { task: Task }) {
       setModal(null);
       setAnswer("");
       toast(
-        DEMO_MODE ? "Answer sent. Task resumed (simulated)." : "Answer recorded. Nothing ran — the execution engine isn't installed yet.",
+        DEMO_MODE ? "Answer sent. Task resumed (simulated)." : "Answer recorded. The task continues.",
         "success",
       );
     },
@@ -196,7 +196,7 @@ function TaskView({ task }: { task: Task }) {
   const retry = () =>
     notice(
       "Retry needs the execution engine",
-      "A retry is only offered when the backend confirms it is safe to repeat the task. That check needs the execution engine, which isn't installed yet (Phase 3), so nothing will be re-run and the task won't be shown as succeeded.",
+      "Failed tasks are not retried automatically. Create a new task (or ask for a plan change) so the new plan is reviewed and approved again before anything re-runs.",
     );
 
   const busy = pause.isPending || resume.isPending || cancel.isPending;

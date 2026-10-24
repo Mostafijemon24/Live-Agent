@@ -3,13 +3,18 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { INTEGRATION_STATUS } from "@/lib/labels";
 import { Badge, Button, EmptyState, ErrorState, Icon, PageHeader, Skeleton } from "@/components/ui";
 import { IntegrationDrawer } from "./IntegrationDrawer";
+import { integrationBadge, isChecking } from "./status";
 
 export function IntegrationsScreen() {
   const [selKey, setSelKey] = useState<string | null>(null);
-  const list = useQuery({ queryKey: ["integrations"], queryFn: () => api.listIntegrations() });
+  const list = useQuery({
+    queryKey: ["integrations"],
+    queryFn: () => api.listIntegrations(),
+    // Poll while a WordPress connection is being verified by the tools worker.
+    refetchInterval: (q) => (q.state.data?.some(isChecking) ? 2000 : false),
+  });
   const items = list.data ?? [];
   const anyConnected = items.some((i) => i.status === "connected");
   const selected = selKey ? items.find((i) => i.key === selKey) ?? null : null;
@@ -18,14 +23,14 @@ export function IntegrationsScreen() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Integrations"
-        subtitle={`Tools the Agent can use, each with its own limited permissions.${anyConnected ? "" : " Nothing here is really connected."}`}
+        subtitle={`Tools the Agent can use, each with its own limited permissions.${anyConnected ? "" : " Nothing is connected yet."}`}
       />
 
       <div className="flex gap-2.5 rounded-[10px] border border-line bg-surface px-3.5 py-3 text-[13px] text-ink-3">
         <Icon name="key-round" size={15} className="mt-0.5 text-primary" />
         <span>
-          You&apos;ll never be asked to paste passwords or API keys. Connections will use a secure server-side flow, and connecting a tool does not give
-          permission to share every file with it.
+          You&apos;ll never be asked to paste passwords or API keys. WordPress (read-only) is the first real integration; others are listed as not built yet.
+          Connecting a tool does not give permission to share every file with it.
         </span>
       </div>
 
@@ -57,7 +62,7 @@ export function IntegrationsScreen() {
                   <div className="font-semibold">{i.name}</div>
                   <div className="text-xs text-muted">{i.last_activity}</div>
                 </div>
-                <Badge meta={INTEGRATION_STATUS[i.status]} className="gap-[5px]" />
+                <Badge meta={integrationBadge(i)} className="gap-[5px]" />
               </div>
               <p className="m-0 flex-1 text-[13.5px] text-ink-2 [text-wrap:pretty]">{i.description}</p>
               <div className="flex gap-1.5 text-[12.5px] text-muted">

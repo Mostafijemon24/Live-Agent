@@ -264,14 +264,21 @@ def verify_binding(
     step_id: uuid.UUID | None,
     policy_version: str,
     extra_hash: dict[str, str] | None = None,
+    allow_consumed: bool = False,
 ) -> str | None:
-    """Re-check an approval right before execution. Returns None if valid, else the reason."""
+    """Re-check an approval right before execution. Returns None if valid, else the reason.
+
+    `allow_consumed=True` only for a retry of the same step's job: everything is re-checked
+    except that the approval was already marked executed by the first attempt."""
     now = utcnow()
     if a.workspace_id != workspace_id:
         return "approval belongs to another workspace"
     if a.status != ApprovalStatus.approved.value:
         return f"approval is {a.status}"
-    if a.execution_state != ExecutionState.pending_execution.value:
+    allowed_states = {ExecutionState.pending_execution.value}
+    if allow_consumed:
+        allowed_states.add(ExecutionState.executed.value)
+    if a.execution_state not in allowed_states:
         return "approval was already used or invalidated"
     if a.operation != operation:
         return "operation changed after approval"

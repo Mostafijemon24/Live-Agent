@@ -20,19 +20,19 @@
 </p>
 
 <p align="center">
-  <img alt="status" src="https://img.shields.io/badge/status-Phase%202%20foundation-3448C5">
-  <img alt="tests" src="https://img.shields.io/badge/backend%20tests-252%20passing-16803C">
-  <img alt="e2e" src="https://img.shields.io/badge/e2e-25%2F25-16803C">
+  <img alt="status" src="https://img.shields.io/badge/status-Phase%203%20agent%20engine-3448C5">
+  <img alt="tests" src="https://img.shields.io/badge/backend%20tests-413%20passing-16803C">
+  <img alt="e2e" src="https://img.shields.io/badge/e2e-25%2F25%20%2B%2013%2F13-16803C">
   <img alt="stack" src="https://img.shields.io/badge/Next.js%2016%20·%20FastAPI%20·%20PostgreSQL%2016-172033">
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-16803C"></a>
 </p>
 
 > [!IMPORTANT]
-> **Current status: Phase 2 — the full-stack foundation is complete; the AI "brain" is not installed yet.**
-> Accounts, private workspaces, tasks, approvals, files, the audit log, settings and security are **real, persisted and tested**.
-> The autonomous engine (AI planner, workers, model providers, real integrations, scheduler) is **Phase 3**.
-> The app is honest about this everywhere: new tasks are saved and show *"Queued — waiting for the planning service"*, and approving something records your decision but runs nothing.
-> A **demo mode** shows the complete experience with sample data (screenshots marked *Demo*).
+> **Current status: Phase 3 — the agent engine works end to end (not deployed to production).**
+> A task is planned by an AI model, checked by a default-deny policy engine, approved by you (the plan, plus one-time approvals for sensitive steps), executed by isolated background workers, and fully audited.
+> It plans with **any OpenAI-compatible model** you configure on the server (OpenAI, a gateway, or a self-hosted Ollama/vLLM). With **no model configured, tasks wait and nothing is sent anywhere**.
+> Real tools today: read attached files, analyse CSV/text, inspect web pages and run SEO audits on **allowlisted** sites, read a WordPress site (read-only, no credentials), write reports, summarise with the model, run short Python programs in a sandbox (with approval), and *propose* file deletions. Writing to WordPress, sending email and full browser automation are **not built** and are shown as such.
+> No product is "completely secure"; what is enforced and tested — and what is not — is listed in [SECURITY_AND_PRIVACY.md](SECURITY_AND_PRIVACY.md).
 
 "Steward" is a placeholder product name; the repository is called **Live-Agent**.
 
@@ -76,7 +76,7 @@ Most "AI agents" either just chat, or act on your accounts without telling you e
 |---|---|
 | A **business owner / non-technical user** | Hand off website maintenance, SEO, content and research without learning tools or command lines, while staying in control. |
 | An **agency / freelancer** | Run repeatable website audits and content work for clients with a clear approval trail. |
-| A **developer / operator** | Self-host a secure, multi-tenant agent platform with real auth, tenant isolation, an audit log and a clean API to plug the Phase 3 engine into. |
+| A **developer / operator** | Self-host a multi-tenant agent platform with real auth, tenant isolation, a policy engine, isolated workers, an audit log and a clean API. |
 
 **Typical tasks it is designed for:** WordPress maintenance (plugin compatibility, broken links, speed), SEO and content (meta descriptions, content briefs, alt text), research (competitor pricing, schema options), file analysis (CSV/support tickets), code tasks (writing tests in a sandbox), and safe browser workflows (uptime/SSL checks on allowlisted sites).
 
@@ -86,25 +86,25 @@ Most "AI agents" either just chat, or act on your accounts without telling you e
 
 <p align="center"><img src="docs/images/how-it-works.png" alt="How a task flows: Describe, Plan, Review plan, Approve actions, Execute, Audit and report" width="100%"></p>
 
-1. **Describe** — Create a task (prompt, type, priority, optional files, execution mode). *Works today.*
-2. **Plan** — The AI planner breaks it into steps with tools, data and risk levels. *Phase 3 — until then the task waits honestly in the queue.*
-3. **Review plan** — Approve all or some steps, edit, ask, or reject. *UI and API ready.*
-4. **Approve actions** — High-impact steps each need a separate, one-time approval showing the exact items, destination, consequences and whether it can be undone. *Works today.*
-5. **Execute** — Workers run only approved steps in isolated sandboxes. *Phase 3.*
-6. **Audit & report** — Every event lands in an append-only audit log; reports and outputs are stored privately. *Audit log works today.*
+1. **Describe** — Create a task (prompt, type, priority, optional files, execution mode).
+2. **Plan** — A background *orchestrator* asks the configured AI model for a plan. The model may only propose a goal, a tool from a fixed list, arguments and the expected output per step; the **server** validates everything and decides permissions, data classification, destinations and whether approval is needed. If the model is an external service, sending the task to it may itself need your approval first.
+3. **Review plan** — Every step shows the policy engine's decision (*Allowed*, *Needs approval*, *Blocked by policy*) with reasons, where data goes and the exact arguments. Approve all or some steps, ask for changes (re-plans), or reject.
+4. **Approve actions** — Sensitive steps (external reads in strict mode, data leaving your servers, code execution, publishing, live changes, deletion) each need a **one-time approval bound to that exact action**. It expires, and is refused if anything changed.
+5. **Execute** — An isolated *tools worker* runs one step at a time, after re-checking the policy and the approval. Network access only to your allowed domains; code only in a sandbox.
+6. **Audit & report** — Every decision, block and execution lands in the append-only audit log; reports are saved privately and downloadable.
 
 ### Architecture
 
-<p align="center"><img src="docs/images/architecture.png" alt="Architecture: Browser → Caddy → Next.js web app → FastAPI API → PostgreSQL and private storage; Phase 3 agent engine attaches through a jobs outbox" width="100%"></p>
+<p align="center"><img src="docs/images/architecture.png" alt="Architecture: Browser → Caddy → Next.js web app → FastAPI API → PostgreSQL and private storage; the agent engine workers read the durable job queue" width="100%"></p>
 
 | Part | Technology | Role |
 |---|---|---|
 | Web app | Next.js 16, React 19, TypeScript, Tailwind CSS 4 | All 20 screens; talks to the API through one adapter |
 | API | Python 3.13, FastAPI, SQLAlchemy 2, Alembic | Auth, sessions, tenant isolation, tasks, approvals, files, audit |
-| Database | PostgreSQL 16 | 22 tables; app connects as a restricted role with **no DELETE** permission |
+| Database | PostgreSQL 16 | 24 tables incl. a durable job queue; every process uses its own restricted role (none can DELETE application rows) |
 | Files | Private Docker volume | Uploads stored outside any web root under random names |
 | Proxy | Caddy 2 | HTTPS certificates, security headers, real client IP |
-| Phase 3 engine | Planner · workers · policy engine · model providers · tools | Plugs into ready-made interfaces (`api/app/ports`) and the `jobs` outbox table |
+| Agent engine | `orchestrator`, `tools`, `deletion`, `scheduler` workers (same image, `python -m app.workers <kind>`) | Planning, policy, tool execution, sandbox, deletion service, automations. Only the orchestrator and tools worker can reach the internet |
 
 More detail: [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -114,29 +114,36 @@ More detail: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ### Capabilities
 
-| Capability | Today (Phase 2) | After Phase 3 |
-|---|---|---|
-| Create tasks in plain language, with type, priority, mode, files | ✅ Real, saved to the database | ✅ |
-| Prepare a step-by-step plan with risk labels | ⏳ Task waits for the planner (shown honestly) | ✅ AI planner |
-| Review, edit, partially approve or reject plans | ✅ UI + API (demo shows it with sample plans) | ✅ |
-| One-time approvals for sensitive actions with exact scope | ✅ Real records, signed and audited | ✅ Enforced at run time |
-| Upload and classify private files | ✅ Real, type-checked, private storage | ✅ + malware scanning |
-| Request file deletion (via approval) | ✅ Request + approval recorded, **nothing deleted** | ✅ Soft delete + retention |
-| Automations (manual / scheduled) | ✅ Saved; manual runs queue a task; schedules stay paused | ✅ Scheduler |
-| Integrations (WordPress, Notion, cloud storage, email, browser, AI provider) | 🔌 Listed with permissions; connecting says "Phase 3" | ✅ Secure OAuth / server flows |
-| Activity & audit log, notifications, security status, settings | ✅ Real | ✅ |
-| Run AI models, browse websites, change live sites, send email | ❌ Not installed | ✅ Only after approval |
+| Capability | Status |
+|---|---|
+| Create tasks in plain language, with type, priority, mode, files | ✅ |
+| AI plan with per-step tool, data classification, destinations and policy decision | ✅ with a configured model (OpenAI-compatible or local); without one the task waits |
+| Review, partially approve, re-plan ("Edit plan") or reject plans | ✅ |
+| One-time approvals bound to the exact action, re-checked before running | ✅ |
+| Read and analyse attached text/CSV/Markdown/JSON files | ✅ (`files.read`, `files.analyze`) |
+| Inspect a web page / SEO audit of a page | ✅ allowlisted domains only (`web.inspect`, `seo.audit`) |
+| WordPress | ✅ **read-only** pages/posts via the public REST API — site URL only, no credentials |
+| Write a markdown report, downloadable | ✅ (`report.write`) |
+| Summarise results with the AI model | ✅ (`ai.summarize`); external providers need approval for confidential data |
+| Run a short Python program | ✅ in a sandbox, **always with approval**; disabled automatically if the host can't isolate it |
+| Delete files | ✅ only through the deletion workflow: request → your approval → separate deletion service re-checks → soft delete → restorable for 30 days → purged. The agent can only *propose* deletions |
+| Automations | ✅ manual and scheduled; each run creates a task whose plan still needs your approval |
+| Activity & audit log, notifications, security status, settings | ✅ |
+| Change a live website, publish, send email, full browser automation, Notion/cloud storage | ❌ Not built — listed as unavailable, never faked |
+| Malware scanning | ❌ Not connected — files show *Not scanned* |
 
 ### Hard limits — what the agent will never do
 
-- ❌ Act on anything **without an approved plan**, and never run a high-impact step without its **own** approval.
-- ❌ Treat **uploading a file as permission to share it**. New files are *Unknown — sharing blocked* until you classify them.
-- ❌ Send **Private** or **Unknown** files to an external AI provider.
-- ❌ Ask for or store **your passwords or API keys in the browser** — integrations will use secure server-side sign-in flows.
-- ❌ **Delete data directly.** Deletion is always a request listing the exact items, which must be approved; actual deletion is disabled in Phase 2.
-- ❌ Pretend something worked. Failed tasks stay *Failed*; "Retry" is only offered when it is safe; simulated results are labelled as simulated.
+- ❌ Run anything **without an approved plan**, or a sensitive step without its **own** one-time approval.
+- ❌ Let the AI model decide permissions, destinations or approvals — its output is untrusted input; extra fields like `"requires_approval": false` are ignored.
+- ❌ Send **Unknown** (unclassified) data outside the workspace, or **Confidential** data without your approval. Uploading a file never means it may be shared.
+- ❌ Contact a website that is not on your **allowed domains** list, or any private/internal network address.
+- ❌ Silently switch to another AI provider, or send anything when no model is configured.
+- ❌ Ask for or store your passwords or API keys in the browser. The model API key lives only in the server's environment.
+- ❌ Delete anything directly, or because the model thinks it is unnecessary.
+- ❌ Run model-generated code inside the web/API process, or give the agent a shell or SQL access.
 - ❌ Access another user's workspace, files or history — even by guessing IDs (tested).
-- ❌ Visit websites that are not on your allowlist (browser tool, Phase 3).
+- ❌ Pretend something worked: blocked, failed and skipped steps are shown as such.
 
 ---
 
@@ -144,9 +151,10 @@ More detail: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Rule | What it means for you |
 |---|---|
-| **Approval is per action, once** | Approving "delete 4 files" covers exactly those 4 files, once. Any change needs a new request. There is no "always allow". |
-| **Approvals expire** | Pending requests expire (e.g. after 24 h). Expired requests can't be approved. |
-| **Approvals are tamper-proof** | Each request is cryptographically signed over everything you see (items, destination, risk, consequences). If anything changes, approval is refused. |
+| **Approval is per action, once** | An approval covers exactly the action shown (tool, full arguments, destinations), once. There is no "always allow". |
+| **Approvals expire and are re-checked** | Unused approvals expire (24 h). Right before running, the worker checks the action is unchanged, the policy is the same version, and the approver is still an owner/admin — otherwise it asks again. |
+| **Approvals are tamper-proof** | Each request is signed (HMAC) over everything you see plus the exact operation. A database trigger keeps decisions final and approvals one-time. |
+| **Privacy modes are enforced** | *Strict*: asks before contacting any site and before any data leaves. *Approval*: asks before data leaves. *Custom*: public/internal data may go to the configured model unless your AI rule says ask. Confidential data always asks; Unknown data never leaves. |
 | **Deletion needs double confirmation** | You must tick that you reviewed the exact item list. |
 | **Your workspace is private** | Every request is checked against your workspace on the server. Other users get "not found". |
 | **Email verification required** | You can only sign in after verifying your email. |
@@ -155,17 +163,35 @@ More detail: [ARCHITECTURE.md](ARCHITECTURE.md).
 | **Quotas** (configurable) | Default: 500 tasks per month, 1 GB file storage per workspace, 25 MB per file. |
 | **Allowed file types** | PDF, PNG, JPG, DOCX, XLSX, CSV, TXT, MD, JSON. Executables, scripts, HTML/SVG, archives and macro documents are refused. |
 | **Roles** | Owner/Admin: everything. Member: create tasks, upload, request deletions. Viewer: read-only. |
-| **Settings are preferences until Phase 3** | Privacy mode, AI rules and tool permissions are saved and logged, and clearly marked *Not enforced yet* until the policy engine is installed. |
+| **Settings are enforced** | Privacy mode, tool switches and allowed domains are read by the policy engine before every step. AI rules can only make it stricter. |
+| **Deleted files are recoverable** | 30 days by default (`DELETION_RETENTION_DAYS`), then the stored bytes are purged. |
+| **Model usage limits** | Default 2,000,000 tokens and 2,000 model calls per workspace per month (configurable). |
 
 ---
 
 ## 🖼️ Screens
 
-**Two sets of screenshots:** *Real* = what the application does today against the real backend. *Demo* = the complete designed experience with sample data (demo mode runs entirely in your browser and is labelled "DEMO MODE").
+### The agent engine in action (real backend, real workers)
+
+Captured by the end-to-end test `e2e/agent-flow.mjs` against a local test site, using the built-in deterministic test planner (`MODEL_PROVIDER=mock`).
+
+| Agent status: model, where it runs, live workers | Plan review: policy decision per step, exact arguments |
+|---|---|
+| <img src="docs/images/phase3/01-overview-agent-status.png" alt="Overview with agent status"> | <img src="docs/images/phase3/02-plan-review-policy.png" alt="Plan review with policy decisions"> |
+| **One-time approval bound to the exact action** | **Completed task with results and report** |
+| <img src="docs/images/phase3/03-approval-bound-action.png" alt="Bound approval"> | <img src="docs/images/phase3/04-task-completed.png" alt="Completed task"> |
+| **A site not on the allowlist is blocked by policy** | **The agent can only propose a deletion — you approve it separately** |
+| <img src="docs/images/phase3/06-external-transfer-blocked.png" alt="Blocked step"> | <img src="docs/images/phase3/07-deletion-needs-separate-approval.png" alt="Deletion approval"> |
+| **Recently deleted — restore within 30 days** | **Security & Privacy — enforced controls** |
+| <img src="docs/images/phase3/08-recently-deleted.png" alt="Recently deleted files"> | <img src="docs/images/phase3/09-security.png" alt="Security page"> |
+
+### Designed experience (demo) and Phase 2 screens
+
+*Demo* = the complete designed experience with sample data (demo mode runs entirely in your browser and is labelled "DEMO MODE"). *Real (Phase 2)* = screenshots from the foundation phase, before the agent engine existed.
 
 ### Dashboard (Overview)
 
-| Demo — full experience | Real — today |
+| Demo — full experience | Real (Phase 2) |
 |---|---|
 | <img src="docs/images/demo/04-dashboard.png" alt="Dashboard in demo mode"> | <img src="docs/images/real/07-overview.png" alt="Dashboard on the real backend"> |
 
@@ -176,7 +202,7 @@ More detail: [ARCHITECTURE.md](ARCHITECTURE.md).
 | <img src="docs/images/demo/07-plan-review.png" alt="Plan review with risk labels"> | <img src="docs/images/demo/12-approvals-external-transfer.png" alt="Approval for sending files externally"> |
 | **Live website change (Demo)** | **Deletion needs exact-item confirmation (Demo)** |
 | <img src="docs/images/demo/13-approvals-production-change.png" alt="Approval for a production website change"> | <img src="docs/images/demo/14-approval-delete-confirm.png" alt="Deletion confirmation dialog"> |
-| **Task waiting honestly for the planner (Real)** | **Deletion request — decision recorded, nothing deleted (Real)** |
+| **Task waiting (Phase 2, before the engine)** | **Deletion request (Phase 2)** |
 | <img src="docs/images/real/09-plan-waiting-for-planner.png" alt="Task waiting for the planning service"> | <img src="docs/images/real/14-approval-deletion.png" alt="Real deletion approval"> |
 
 <details>
@@ -256,7 +282,7 @@ cd Live-Agent
 cp .env.example .env
 ```
 
-Open `.env` and replace **every** `replace-me` (three database passwords and `APPROVAL_SIGNING_KEY`). Generate strong values with:
+Open `.env` and replace **every** `replace-me` (six database passwords and `APPROVAL_SIGNING_KEY`). Generate strong values with:
 
 ```bash
 openssl rand -base64 32     # run once per value
@@ -278,6 +304,32 @@ docker compose exec api sh -c 'cat "/data/mail-outbox/$(ls -t /data/mail-outbox 
 
 Copy the `http://localhost:3000/verify-email?token=…` link into your browser, then sign in.
 
+**Let the agent plan (choose one in `.env`), then run `docker compose up -d` again:**
+
+```ini
+# A) Try it with the built-in deterministic test planner (development only, no AI, nothing sent anywhere)
+MODEL_PROVIDER=mock
+
+# B) A self-hosted model on your own server (e.g. Ollama with an OpenAI-compatible endpoint)
+MODEL_PROVIDER=openai_compatible
+MODEL_BASE_URL=http://ollama:11434/v1
+MODEL_NAME=llama3.1:8b
+MODEL_LOCATION=local
+MODEL_PROVIDER_LABEL=Ollama on this server
+
+# C) An external AI service (data leaves your servers — confidential data needs your approval)
+MODEL_PROVIDER=openai_compatible
+MODEL_BASE_URL=https://api.openai.com/v1
+MODEL_NAME=gpt-4o-mini
+MODEL_API_KEY=<your key — stays on the server>
+MODEL_LOCATION=external
+MODEL_PROVIDER_LABEL=OpenAI
+```
+
+Then in the app: **Settings → Allowed domains** (add your website's domain so the agent may read it), pick a **privacy mode**, and create a task such as *"Run an SEO audit of https://yourdomain.com/ and write a report."*
+
+> The `tools` worker runs Python only if it can create an isolated sandbox. Docker's default security profile prevents that, so **code steps are blocked in Docker by default** (everything else works). Don't disable seccomp to change this; run code tasks on a host with gVisor or a dedicated sandbox machine.
+
 ### Option B — Demo mode only (no database, no backend)
 
 See the full designed experience with sample data in 1 minute (requires Node.js 22):
@@ -298,6 +350,7 @@ Open http://localhost:3000 and sign in with **any** email and password (use the 
 ```bash
 # 1) Database roles + database (once, as a PostgreSQL superuser)
 sudo -u postgres STEWARD_OWNER_PASSWORD=devowner STEWARD_APP_PASSWORD=devapp \
+  STEWARD_WORKER_PASSWORD=devworker STEWARD_DELETER_PASSWORD=devdeleter STEWARD_READONLY_PASSWORD=devreadonly \
   bash deploy/db/init-roles.sh
 
 # 2) API  (uses uv: https://docs.astral.sh/uv/)
@@ -308,10 +361,19 @@ ENV=development
 DATABASE_URL=postgresql+psycopg://steward_app:devapp@127.0.0.1:5432/steward
 MIGRATION_DATABASE_URL=postgresql+psycopg://steward_owner:devowner@127.0.0.1:5432/steward
 APP_ORIGIN=http://localhost:3000
+WORKER_DATABASE_URL=postgresql+psycopg://steward_worker:devworker@127.0.0.1:5432/steward
+DELETION_DATABASE_URL=postgresql+psycopg://steward_deleter:devdeleter@127.0.0.1:5432/steward
+MODEL_PROVIDER=mock
 EOF
 uv run alembic upgrade head
 uv run uvicorn app.main:app --port 8000 --no-proxy-headers
 #   API docs (development only): http://localhost:8000/api/v1/docs
+
+# 2b) Workers (one terminal each, or a process manager)
+uv run python -m app.workers orchestrator
+uv run python -m app.workers tools
+uv run python -m app.workers deletion
+uv run python -m app.workers scheduler
 
 # 3) Web (new terminal)
 cd web
@@ -330,13 +392,13 @@ Development emails are written to `api/var/mail-outbox/`.
 3. **Create a task** — Go to **New task** (or use **Quick task** on the Overview). Write what you need in one or two sentences. Choose:
    - **Plan only** *(safest — default)*: the agent only prepares a plan.
    - **Prepare changes for review**: drafts changes inside your workspace; nothing is applied.
-   - *Execute approved steps*: disabled until Phase 3.
-4. **Review the plan** — Each step shows its tool and risk (*Read only*, *Workspace only*, *Production change*, *Publish*, *External transfer*). Untick steps you don't want, ask a question, edit, approve or reject.
-   *Today the plan page explains that the planner isn't installed yet; your task stays safely queued.*
+   - **Execute approved steps**: runs the steps you approve. In every mode a plan needs your approval first.
+4. **Review the plan** — Each step shows its tool, risk, the policy decision (*Allowed* / *Needs approval* / *Blocked by policy*) with the reason, the data involved, where it goes and the **exact arguments**. Untick steps you don't want, use **Edit plan** to re-plan with feedback, approve or reject.
 5. **Handle approvals** — The **Approvals** page lists everything waiting for you, with coloured warnings (red = data leaves your workspace or deletion; amber = live change, publish, send). Check *what*, *why*, *which items*, *destination*, *consequences* and *can it be undone*, then **Approve once**, **Reject** or **Request changes**.
-6. **Add files** — **Files & Knowledge → Add file.** Files stay private. Set a privacy classification (*Private*, *Approved for selected integration*, *Public*, *Unknown*). To delete, use **Request deletion** — it becomes an approval.
+6. **Add files** — **Files & Knowledge → Add file.** Files stay private. Set a classification (*Public*, *Internal*, *Confidential*, *Unknown* — Unknown never leaves the workspace). To delete, use **Request deletion** — it becomes an approval; after approval the file moves to **Recently deleted** and can be restored for 30 days.
 7. **Watch progress** — **Tasks** shows every task with filters; open one to see its plan, logs, inputs, outputs and audit events. **Reports & Activity** shows the full audit log.
-8. **Stay safe** — **Security & Privacy** shows your privacy mode, what is enforced and what is not yet, recent decisions and blocked actions. **Settings** holds your profile, notifications, AI behaviour, allowed domains and usage.
+8. **Connect WordPress (optional)** — add your site's domain under **Settings → Allowed domains**, then **Integrations → WordPress → Connect** with the site address. No password is asked: the agent reads published pages/posts through the public REST API.
+9. **Stay safe** — **Security & Privacy** shows the agent's model and where it runs, your privacy mode, what is enforced, recent decisions and blocked actions. **Settings** holds your profile, notifications, AI behaviour, tool switches, allowed domains and usage.
 
 **When should I use it?** Whenever you want work done on your website, content, research or files **without** giving anyone (human or AI) unchecked access — and you want a record of every decision.
 
@@ -344,9 +406,9 @@ Development emails are written to `api/var/mail-outbox/`.
 
 ## 🖥️ Hosting requirements
 
-| | Minimum (Phase 2, small team) | Recommended (Phase 3 with AI engine) |
+| | Minimum (small team, external or no model) | Recommended (self-hosted model or heavier use) |
 |---|---|---|
-| Server | VPS with 2 vCPU, 4 GB RAM, 40 GB SSD (e.g. Hostinger **KVM 2**) | 4–8 vCPU, 8–16 GB RAM, 100+ GB SSD (Hostinger **KVM 4 / KVM 8**) |
+| Server | VPS with 2 vCPU, 4 GB RAM, 40 GB SSD (e.g. Hostinger **KVM 2**) | 4–8 vCPU, 8–16 GB RAM, 100+ GB SSD (Hostinger **KVM 4 / KVM 8**); a local LLM needs more RAM or a GPU server |
 | OS | Ubuntu 24.04 LTS (or 22.04) | Same |
 | Software | Docker Engine + Docker Compose v2, Git | Same |
 | Network | Public IPv4, ports 22, 80, 443 open | Same + outbound access to your AI provider |
@@ -381,7 +443,16 @@ Development emails are written to `api/var/mail-outbox/`.
    POSTGRES_SUPERUSER_PASSWORD=<random>
    STEWARD_OWNER_PASSWORD=<random>
    STEWARD_APP_PASSWORD=<random>
+   STEWARD_WORKER_PASSWORD=<random>
+   STEWARD_DELETER_PASSWORD=<random>
+   STEWARD_READONLY_PASSWORD=<random>
    APPROVAL_SIGNING_KEY=<random, 32+ characters>
+   MODEL_PROVIDER=openai_compatible   # or none
+   MODEL_BASE_URL=https://api.openai.com/v1
+   MODEL_NAME=gpt-4o-mini
+   MODEL_API_KEY=<key>
+   MODEL_LOCATION=external
+   MODEL_PROVIDER_LABEL=OpenAI
    APP_ENV=production
    APP_ORIGIN=https://agent.yourdomain.com
    DOMAIN=agent.yourdomain.com
@@ -393,11 +464,13 @@ Development emails are written to `api/var/mail-outbox/`.
    SMTP_USERNAME=no-reply@yourdomain.com
    SMTP_PASSWORD=<your mailbox password>
    ```
-   The API **refuses to start** in production if a secret is still a placeholder, the signing key is short, mail isn't SMTP, the origin isn't HTTPS, or the proxy setting is missing — this is intentional.
+   The API **refuses to start** in production if a secret is still a placeholder, the signing key is short, mail isn't SMTP, the origin isn't HTTPS, the proxy setting is missing, the mock planner is selected, an external model uses `http://`, or private-network egress is enabled — this is intentional.
+
+   *Upgrading an existing Phase 2 server:* the database init script only runs on a fresh volume. Create the three new roles once with `docker compose exec db bash /docker-entrypoint-initdb.d/10-init-roles.sh` (it reads the passwords from the container environment and skips existing roles), then start the stack — migrations 0004/0005 apply automatically.
 6. **Start with automatic HTTPS (Caddy)**:
    ```bash
    docker compose --profile tls up -d --build
-   docker compose ps          # db, api, web, caddy should be running/healthy
+   docker compose ps          # db, api, web, caddy, orchestrator, tools, deletion, scheduler
    ```
 7. Open **https://agent.yourdomain.com**, register, verify your email, sign in.
 8. **Backups** (daily at 03:00):
@@ -416,16 +489,15 @@ Development emails are written to `api/var/mail-outbox/`.
 
 ## 🔑 Which APIs and keys are needed?
 
-| What | Needed now (Phase 2)? | Notes |
+| What | Needed? | Notes |
 |---|---|---|
-| Database passwords (3) | **Yes** | Generated by you, stored only in `.env` on the server |
+| Database passwords (6) | **Yes** | Generated by you, stored only in `.env` on the server |
 | `APPROVAL_SIGNING_KEY` | **Yes** | Random 32+ characters; signs approval requests |
 | SMTP mailbox | **Yes in production** | For verification and password-reset emails |
 | Domain + DNS | **Yes in production** | For HTTPS |
-| AI model provider key (OpenAI, Google Gemini, Mistral, or a local model via Ollama) | No — Phase 3 | Will be configured **on the server only**, never in the browser; files are only sent to it with per-action approval |
-| WordPress connection (Application Password / OAuth) | No — Phase 3 | Read-only by default; writes need per-action approval |
-| Notion, Google Drive / cloud storage, email-sending integrations | No — Phase 3 | Least-privilege scopes, encrypted storage |
-| Malware scanner (e.g. ClamAV) | No — Phase 3 | Files show *Not scanned* until connected |
+| AI model (any OpenAI-compatible `/v1/chat/completions` endpoint) | **Needed for planning** | OpenAI, an API gateway, or a self-hosted Ollama/vLLM/llama.cpp server. Configured only in server environment variables. Without it tasks wait and nothing is sent |
+| WordPress | Optional | Site URL only (read-only, public REST API). No credentials |
+| Malware scanner, Notion, cloud storage, email sending, WordPress write access | Not built | Shown as unavailable in the app |
 
 **This app never asks you to paste passwords or API keys into the web interface.**
 
@@ -441,6 +513,16 @@ Development emails are written to `api/var/mail-outbox/`.
 | `POSTGRES_SUPERUSER_PASSWORD` | — | Database superuser (used only by the DB container) |
 | `STEWARD_OWNER_PASSWORD` | — | Schema-owner role (runs migrations) |
 | `STEWARD_APP_PASSWORD` | — | Restricted role used by the API (no DELETE, no DDL) |
+| `STEWARD_WORKER_PASSWORD` | — | Role for orchestrator/tools/scheduler (no DELETE, no secrets) |
+| `STEWARD_DELETER_PASSWORD` | — | Role for the deletion service only |
+| `STEWARD_READONLY_PASSWORD` | — | Read-only reporting role (no secrets) |
+| `MODEL_PROVIDER` | `none` | `none` · `openai_compatible` · `mock` (development only) |
+| `MODEL_BASE_URL`, `MODEL_NAME`, `MODEL_API_KEY` | — | Model endpoint, model and key (server-side only) |
+| `MODEL_LOCATION` | `external` | `external` (third-party service) or `local` (you operate it) — shown to users |
+| `MODEL_PROVIDER_LABEL` | — | Name shown to users, e.g. "OpenAI" |
+| `MONTHLY_MODEL_TOKEN_QUOTA` | 2,000,000 | Per workspace (calls: `MONTHLY_MODEL_CALL_QUOTA`, 2,000) |
+| `SANDBOX_ENABLED` | `true` | Code steps run only if the tools worker can isolate them |
+| `DELETION_RETENTION_DAYS` | 30 | Deleted files are restorable for this long |
 | `APPROVAL_SIGNING_KEY` | — | HMAC key for approval requests (32+ chars in production) |
 | `TRUST_PROXY_HEADERS` | `false` | `true` only behind Caddy (`--profile tls`) |
 | `WEB_BIND` | `127.0.0.1` | Interface the web port binds to |
@@ -462,13 +544,16 @@ Full list with comments: [.env.example](.env.example).
 api/                FastAPI service
   app/core/         config, database, security, errors, CSRF/session deps, rate limits
   app/domain/       enums and the task state machine
-  app/models.py     SQLAlchemy models (22 tables)
+  app/models.py     SQLAlchemy models (24 tables)
   app/schemas/      Pydantic request/response models
-  app/ports/        interfaces for Phase 3 (planner, model provider, job queue, worker, tools, policy, storage, scanner, mailer)
-  app/adapters/     Phase 2 implementations (safe "not configured" adapters, private storage, mail)
+  app/engine/       agent engine: policy, planner, providers, egress, redaction, sandbox, queue,
+                    orchestrator, runner, deletion, scheduler, integrations, tools/
+  app/workers/      worker processes (python -m app.workers orchestrator|tools|deletion|scheduler)
+  app/ports/        interfaces (planner, model provider, job queue, worker, tools, policy, storage, scanner, mailer)
+  app/adapters/     private storage, mail, scanner
   app/services/     business logic, always scoped to the signed-in workspace
   app/routers/      HTTP routes (/api/v1)
-  migrations/       Alembic migrations (0001 schema, 0002 privileges, 0003 tenant keys)
+  migrations/       Alembic migrations (0001 schema, 0002 privileges, 0003 tenant keys, 0004 agent engine, 0005 grant hardening)
   tests/            pytest (isolated *_test database)
 web/                Next.js app
   app/              routes (public pages + the (app) shell)
@@ -476,7 +561,7 @@ web/                Next.js app
   components/       UI kit + app shell
   lib/api/          AgentApi interface, HTTP adapter, demo adapter, wire types
 deploy/             DB role bootstrap, backup script, Caddyfile
-e2e/                browser end-to-end smoke test
+e2e/                browser end-to-end tests (smoke.mjs, agent-flow.mjs)
 docs/images/        README screenshots, banner and diagrams
 project/, chats/    the approved Phase 1 design prototype
 ```
@@ -485,8 +570,8 @@ project/, chats/    the approved Phase 1 design prototype
 - **One API adapter** (`web/lib/api`): every screen calls `api.*`. Real HTTP by default; the demo adapter is only included when built with `NEXT_PUBLIC_DEMO_MODE=true`.
 - **Tenant isolation** happens server-side on every query; the workspace comes from the session, never from the request.
 - **Task state machine** in `api/app/domain/task_states.py` — the only place that allows status changes (tested for all 121 combinations).
-- **Plugging in Phase 3**: implement `TaskPlanner`, `JobQueue`/`Worker`, `ModelProvider`, `ToolRegistry`, `ApprovalPolicy`, `FileScanner` from `api/app/ports` and swap them in `api/app/adapters`. Workers read the `jobs` table (already filled with `task.plan` / `task.execute` jobs).
-- **API reference**: [API_CONTRACT.md](API_CONTRACT.md) (50 endpoints, error codes, rate limits) and the live OpenAPI docs at `/api/v1/docs` in development.
+- **Agent engine**: the API only records decisions and queues jobs; workers do the work. A new tool = one `ToolDefinition` (Pydantic args schema, impact, permissions, classifications, destinations, `run`) in `api/app/engine/tools/` — the policy engine and approvals apply automatically. A new model provider = one class implementing `generate()` + `ProviderInfo`.
+- **API reference**: [API_CONTRACT.md](API_CONTRACT.md) (55 endpoints, error codes, rate limits) and the live OpenAPI docs at `/api/v1/docs` in development.
 
 ---
 
@@ -497,17 +582,18 @@ project/, chats/    the approved Phase 1 design prototype
 cd api
 uv run ruff check app migrations tests && uv run ruff format --check app migrations tests
 uv run mypy app
-uv run pytest                     # 252 tests; creates and drops only *_test databases
+uv run pytest                     # 413 tests; creates and drops only *_test databases
 
 # Frontend
 cd ../web
 npm run lint && npm run typecheck && npm test && npm run build
 
-# End-to-end (API on :8000, `npm run build && npm start` on :3000)
+# End-to-end (API on :8000, workers running, `npm run build && npm start` on :3000)
 cd .. && MAIL_OUTBOX_DIR=api/var/mail-outbox node e2e/smoke.mjs
+SITE_URL=http://acme-demo.test:8099 node e2e/agent-flow.mjs   # needs a local test site + dev egress settings
 ```
 
-Latest verified results (2026-10-24): 252 backend tests passing (three consecutive runs), 25 frontend unit tests, production build, end-to-end 25/25 steps with 0 console errors, `npm audit` and `pip-audit` with 0 known vulnerabilities. An independent security review found 13 issues; all were fixed with regression tests, except two minor items that are documented as accepted risks ([SECURITY_REVIEW.md](SECURITY_REVIEW.md)). Full report: [PHASE2_REPORT.md](PHASE2_REPORT.md).
+Latest verified results (2026-10-24, Phase 3): 413 backend tests passing (1 skipped: a fork-bomb limit the kernel does not enforce for real root in the dev container), 39 frontend unit tests, production build, browser end-to-end: smoke 25/25 and agent flow 13/13. An independent security review of the engine found 11 issues (1 High, 5 Medium); all have fixes with regression tests, a few are partial and documented ([SECURITY_REVIEW.md](SECURITY_REVIEW.md)). Full report: [PHASE3_REPORT.md](PHASE3_REPORT.md) (Phase 2: [PHASE2_REPORT.md](PHASE2_REPORT.md)).
 
 ---
 
@@ -520,10 +606,14 @@ Highlights (all enforced **and** covered by automated tests):
 - Strict tenant isolation (server checks + database constraints) · role-based permissions
 - Restricted database role with **no DELETE** · append-only audit log
 - Private, type-checked file storage · safe downloads · uploads never imply sharing
-- Signed, expiring, one-time approvals · deletion only via approval (disabled until Phase 3)
+- Signed, expiring, one-time approvals bound to the exact action and re-verified before execution
+- Default-deny policy engine re-checked before every step · model output treated as untrusted input
+- Strict privacy: nothing goes to an external model without permission; secrets redacted; usage recorded without prompts
+- Egress control (allowlist, private-address block, DNS pinning) · sandboxed code (namespaces, no network, no capabilities)
+- Separate database roles per process · deletion service with re-validation, soft delete, restore and purge
 - Rate limits, security headers, Content-Security-Policy, production configuration guards
 
-What is **not** enforced yet (policy engine, malware scanning, encrypted secret storage, egress control, row-level security) is listed honestly in [SECURITY_AND_PRIVACY.md](SECURITY_AND_PRIVACY.md).
+What is **not** enforced yet (malware scanning, encrypted per-workspace secrets, a network-level egress firewall, VM-grade sandboxing, row-level security, a tamper-evident audit chain) is listed honestly in [SECURITY_AND_PRIVACY.md](SECURITY_AND_PRIVACY.md).
 
 ---
 
@@ -533,14 +623,21 @@ What is **not** enforced yet (policy engine, malware scanning, encrypted secret 
 |---|---|---|
 | **1 — Design** | ✅ Done | Clickable prototype of all 20 screens (`project/`) |
 | **2 — Foundation** | ✅ Done | Real auth, workspaces, tasks, approvals, files, audit, API, tests, Docker deployment, security review |
-| **3 — Agent engine** | 🔜 Next | AI planner, job workers, policy engine enforcing approvals and privacy, model providers (OpenAI / Gemini / Mistral / local), WordPress/Notion/storage/email integrations, isolated browser and code sandboxes, malware scanning, scheduler, soft-delete & retention, monitoring |
+| **3 — Agent engine** | ✅ Done (not deployed) | AI planner, policy engine, bound approvals, durable queue and workers, model gateway (OpenAI-compatible / local), tools, egress control, sandbox, deletion service with retention, scheduler, WordPress read-only, observability |
+| **4 — Next** | 🔜 | Authenticated integrations with encrypted secret storage (WordPress write, email, cloud storage, Notion), malware scanning, VM-grade sandbox, network egress proxy, hash-chained audit log, row-level security, production deployment |
 
 ---
 
 ## ❓ FAQ and troubleshooting
 
 <details><summary><b>I created a task but nothing happens.</b></summary>
-That is expected in Phase 2. The task is saved and shows <i>Queued — waiting for the planning service</i>. The AI planner arrives in Phase 3. Use demo mode to preview the full flow.</details>
+Check <b>Overview → Agent status</b>. "No AI model is configured" means <code>MODEL_PROVIDER</code> is <code>none</code> — tasks wait and nothing is sent. "Workers not running" means the <code>orchestrator</code>/<code>tools</code> containers are down (<code>docker compose ps</code>, <code>docker compose logs orchestrator</code>). If the task waits for <i>approval</i>, open <b>Approvals</b>.</details>
+
+<details><summary><b>A step says "Blocked by policy".</b></summary>
+Read the reason under the step. Common causes: the website's domain is not in <b>Settings → Allowed domains</b>, a tool is switched off in <b>Settings → Tool permissions</b>, or the data is <i>Unknown</i> and would leave the workspace. Change the setting and use <b>Edit plan</b> to re-plan.</details>
+
+<details><summary><b>Code steps are always blocked.</b></summary>
+The sandbox could not isolate programs on the tools worker (Docker's default security profile prevents it). This is deliberate: code never runs without isolation.</details>
 
 <details><summary><b>I didn't receive the verification email.</b></summary>
 In development (<code>MAIL_BACKEND=outbox</code>) emails are saved as files, not sent — see the Quick start command to read them. In production check your SMTP settings and the API logs: <code>docker compose logs api</code>.</details>
@@ -557,11 +654,11 @@ Run <code>docker compose logs api</code>. The most common cause is the productio
 <details><summary><b>My upload was refused.</b></summary>
 Only PDF, PNG, JPG, DOCX, XLSX, CSV, TXT, MD and JSON up to 25 MB are accepted, the file extension must match the real content, and files containing scripts, macros or executables are refused.</details>
 
-<details><summary><b>Can I connect my WordPress site now?</b></summary>
-Not yet — integrations arrive in Phase 3 with secure server-side sign-in. The app will never ask for your password in the browser.</details>
+<details><summary><b>Can I connect my WordPress site?</b></summary>
+Yes, read-only: add the domain to Allowed domains, then Integrations → WordPress → Connect with the site address. No password is asked. Changing your site from the agent is not built yet.</details>
 
 <details><summary><b>Is my data sent to an AI company?</b></summary>
-No. No AI provider is configured in Phase 2, so nothing leaves your server. In Phase 3, files will only be sent with your explicit, per-action approval, and Private/Unknown files are blocked.</details>
+Only if your administrator configured an <i>external</i> model — the app says so on the Overview and Security pages. Even then, confidential data is sent only after your one-time approval, unknown data never, and known secrets are redacted first. With a <i>local</i> model, data stays on your own servers (it still leaves this app's process). With no model configured, nothing is sent.</details>
 
 ---
 
@@ -574,7 +671,8 @@ No. No AI provider is configured in Phase 2, so nothing leaves your server. In P
 | [API_CONTRACT.md](API_CONTRACT.md) | Every endpoint, error codes, rate limits, roles |
 | [SECURITY_AND_PRIVACY.md](SECURITY_AND_PRIVACY.md) | Enforced vs. not-yet-enforced controls |
 | [SECURITY_REVIEW.md](SECURITY_REVIEW.md) | Independent security review and fixes |
-| [PHASE2_REPORT.md](PHASE2_REPORT.md) | What was built, commands run, results, load baseline, Phase 3 list |
+| [PHASE3_REPORT.md](PHASE3_REPORT.md) | Agent engine: what was built, tests, review findings, limitations and risks |
+| [PHASE2_REPORT.md](PHASE2_REPORT.md) | Foundation: what was built, commands run, results, load baseline |
 | [web/FRONTEND_GUIDE.md](web/FRONTEND_GUIDE.md) | Conventions for screens and the API adapter |
 | [docs/DESIGN_HANDOFF.md](docs/DESIGN_HANDOFF.md), `project/` | The approved Phase 1 design |
 | [LICENSE](LICENSE) | MIT license |

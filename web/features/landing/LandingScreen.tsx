@@ -94,7 +94,7 @@ export function LandingScreen() {
           <p className="mt-3.5 text-[13px] text-muted">
             {DEMO_MODE
               ? "Prototype only — no real account is created and no task is executed."
-              : "Early preview — the AI agent engine is not installed yet. Tasks are saved but not executed."}
+              : "Early preview — the Agent plans first, and nothing runs until you approve the plan."}
           </p>
         </div>
 
@@ -165,7 +165,7 @@ export function LandingScreen() {
 
       <footer className="border-t border-line bg-surface">
         <div className={`${wrap} flex flex-wrap justify-between gap-4 py-5 text-[13px] text-muted`}>
-          <span>{DEMO_MODE ? "Steward — design prototype. Not a production service." : "Steward — early preview. The AI agent engine is not installed yet."}</span>
+          <span>{DEMO_MODE ? "Steward — design prototype. Not a production service." : "Steward — early preview. Not a guarantee of complete security; see Security & privacy."}</span>
           <div className="flex gap-4">
             <button type="button" onClick={placeholder} className="border-0 bg-transparent p-0 text-[13px] text-primary">
               Terms (placeholder)

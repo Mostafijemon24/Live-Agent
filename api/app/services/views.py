@@ -66,6 +66,8 @@ def step_out(s: TaskStep) -> S.TaskStepOut:
         finished_at=s.finished_at,
         step_key=s.step_key or f"s{s.position}",
         tool_id=s.tool_id,
+        args=dict(s.args or {}),
+        args_hash=s.args_hash,
         impact=s.impact,
         classifications=list(s.classifications or []),
         destinations=list(s.destinations or []),

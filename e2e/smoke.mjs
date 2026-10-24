@@ -101,13 +101,14 @@ try {
     await page.getByLabel(/describe a task/i).fill("Audit my WordPress website for SEO problems and show fixes first");
     await page.getByRole("button", { name: /plan task/i }).click();
     await page.waitForURL(/\/tasks\/[0-9a-f-]+\/plan/);
-    await page.getByText(/waiting for the planning service/i).first().waitFor();
+    // A plan appears once the worker has planned it (or the page explains it is waiting).
+    await page.locator("text=/approve selected steps|waiting|planning/i >> visible=true").first().waitFor();
     taskUrl = page.url().replace(/\/plan$/, "");
   }, page);
 
   await step("task-detail", async () => {
     await page.goto(taskUrl + "?tab=logs");
-    await page.getByText(/not installed/i).first().waitFor();
+    await page.getByText(/queued for planning|plan ready|no approved ai model/i).first().waitFor();
   }, page);
 
   await step("tasks-list", async () => {
@@ -134,25 +135,31 @@ try {
     await page.getByText(/items will be deleted/i).first().waitFor();
   }, page);
 
-  await step("approve-deletion-records-decision-only", async () => {
+  await step("approve-deletion-queues-the-deletion-service", async () => {
     await page.getByRole("button", { name: /approve once/i }).first().click();
     const dlg = page.getByRole("dialog").last();
     for (const cb of await dlg.getByRole("checkbox").all()) await cb.check();
     await dlg.getByRole("button", { name: /approve/i }).last().click();
-    await page.locator("text=/nothing was executed|nothing ran|blocked until/i >> visible=true").first().waitFor();
+    await page.locator("text=/waiting to run|used|approved/i >> visible=true").first().waitFor();
   }, page);
 
-  await step("file-still-exists", async () => {
+  await step("deleted-file-is-restorable", async () => {
+    // The deletion service (separate worker) soft-deletes it; it then appears under Recently deleted.
+    for (let i = 0; i < 40; i++) {
+      const n = await page.evaluate(async () => (await (await fetch("/api/v1/files?deleted=true")).json()).items.length);
+      if (n > 0) break;
+      await page.waitForTimeout(500);
+    }
     await page.goto(BASE + "/files");
+    await page.getByRole("button", { name: /recently deleted/i }).first().click();
     await page.getByText("crawl-e2e.csv").first().waitFor();
   }, page);
 
-  await step("integrations-connect-explains-phase3", async () => {
+  await step("integrations-wordpress-is-read-only-without-credentials", async () => {
     await page.goto(BASE + "/integrations");
-    await page.getByRole("button", { name: /manage/i }).first().click();
-    await page.getByRole("button", { name: /connect/i }).last().click();
-    await page.getByText(/connecting needs the backend/i).first().waitFor();
-    await page.getByRole("button", { name: /got it/i }).click();
+    await page.getByRole("button", { name: /manage|connect/i }).first().click();
+    await page.getByText(/credentials/i).first().waitFor();
+    await page.keyboard.press("Escape");
   }, page);
 
   for (const [route, text] of [

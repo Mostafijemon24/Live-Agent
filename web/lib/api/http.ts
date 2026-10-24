@@ -95,6 +95,8 @@ export class HttpAgentApi implements AgentApi {
   completeOnboarding(i: T.OnboardingInput) { return this.req<T.Me>("POST", "/me/onboarding", i); }
 
   dashboard() { return this.req<T.Dashboard>("GET", "/dashboard"); }
+  getAgentStatus() { return this.req<T.AgentStatus>("GET", "/agent/status"); }
+  getAgentTools() { return this.req<T.AgentTool[]>("GET", "/agent/tools"); }
 
   // tasks
   listTasks(q: T.TaskListQuery) { return this.req<T.Page<T.TaskSummary>>("GET", "/tasks" + qs(q)); }
@@ -134,6 +136,8 @@ export class HttpAgentApi implements AgentApi {
   }
   requestFileDeletion(id: string, reason: string) { return this.req<T.Approval>("POST", `/files/${encodeURIComponent(id)}/deletion-request`, { reason }); }
   fileDownloadUrl(id: string) { return `${BASE}/files/${encodeURIComponent(id)}/download`; }
+  restoreFile(id: string) { return this.req<T.FileItem>("POST", `/files/${encodeURIComponent(id)}/restore`); }
+  artifactDownloadUrl(id: string) { return `${BASE}/artifacts/${encodeURIComponent(id)}/download`; }
 
   // automations
   listAutomations() { return this.req<T.Automation[]>("GET", "/automations"); }
@@ -144,6 +148,7 @@ export class HttpAgentApi implements AgentApi {
   // integrations
   listIntegrations() { return this.req<T.Integration[]>("GET", "/integrations"); }
   connectIntegration(key: string) { return this.req<T.Integration>("POST", `/integrations/${encodeURIComponent(key)}/connect`); }
+  connectWordPress(siteUrl: string) { return this.req<T.Integration>("POST", "/integrations/wordpress/connect", { site_url: siteUrl }); }
   disconnectIntegration(key: string) { return this.req<T.Integration>("POST", `/integrations/${encodeURIComponent(key)}/disconnect`); }
 
   // reports & activity

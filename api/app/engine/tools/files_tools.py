@@ -52,6 +52,8 @@ def _load(ctx: ToolContext, file_id: uuid.UUID) -> tuple[FileInfo, str]:
         raise ToolError(
             "unsupported_type", f"{f.type_label} files can't be analysed yet (text, CSV, Markdown and JSON only)."
         )
+    if not f.storage_key.startswith(f"{ctx.workspace_id}/"):
+        raise ToolError("storage_mismatch", "The stored object does not belong to this workspace.")
     path = LocalPrivateFileStorage(ctx.settings.storage_dir).local_path(f.storage_key)
     with path.open("rb") as fh:
         raw = fh.read(MAX_READ_BYTES + 1)

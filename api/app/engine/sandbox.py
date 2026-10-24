@@ -27,10 +27,13 @@ import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from app.core.config import Settings, get_settings
 
 PROBE_FAILED_EXIT = 97
+_UNSHARE = shutil.which("unshare") or "/usr/bin/unshare"
+_SETPRIV = shutil.which("setpriv") or "/usr/bin/setpriv"
 
 
 @dataclass(frozen=True)
@@ -85,7 +88,12 @@ def _script(settings: Settings) -> str:
         f'for p in {hide}; do mount -t tmpfs -o size=1m,mode=700 none "$p" || exit {PROBE_FAILED_EXIT}; done; '
         f"mount -t tmpfs -o size=16m,mode=1777 none /tmp || exit {PROBE_FAILED_EXIT}; "
         f"if ( : > /.steward_probe ) 2>/dev/null; then echo 'sandbox: root filesystem is writable' >&2; exit {PROBE_FAILED_EXIT}; fi; "
-        f"cd /tmp && exec {shlex.quote(_interpreter())} -I -S -"
+        # Final hop: a nested user namespace as an unprivileged uid. The masks above become
+        # locked (cannot be unmounted from a less-privileged namespace) and the program runs
+        # with no capabilities and no_new_privs.
+        f"cd /tmp && exec {shlex.quote(_UNSHARE)} --user --mount --map-user=65534 --map-group=65534 -- "
+        f"{shlex.quote(_SETPRIV)} --no-new-privs --inh-caps=-all -- "
+        f"{shlex.quote(_interpreter())} -I -S -"
     )
 
 
@@ -97,6 +105,8 @@ def _limits(settings: Settings) -> None:  # runs in the child before exec
     resource.setrlimit(resource.RLIMIT_FSIZE, (1024 * 1024, 1024 * 1024))
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    # Counted per user namespace (Linux >= 5.14): stops fork bombs inside the sandbox.
+    resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
 
 
 def _command() -> list[str] | None:
@@ -113,8 +123,11 @@ def isolation_status() -> tuple[bool, str]:
     if not settings.sandbox_enabled:
         return False, "Code execution is disabled by the administrator (SANDBOX_ENABLED=false)."
     cmd = _command()
-    if cmd is None:
-        return False, "The sandbox needs util-linux 'unshare', which is not installed on the tools worker."
+    if cmd is None or not shutil.which("setpriv"):
+        return (
+            False,
+            "The sandbox needs util-linux 'unshare' and 'setpriv', which are not installed on the tools worker.",
+        )
     try:
         r = _run(
             settings,
@@ -148,20 +161,13 @@ def _run(settings: Settings, code: str) -> SandboxResult:
         )
     except OSError as e:
         raise SandboxUnavailable(f"The sandbox could not start ({type(e).__name__}).") from None
-    timed_out = False
-    try:
-        out, err = proc.communicate(code.encode(), timeout=settings.sandbox_timeout_seconds)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        out, err = proc.communicate()
+    cap = settings.sandbox_max_output_bytes
+    out, err, timed_out, flooded = _collect(proc, code.encode(), settings.sandbox_timeout_seconds, cap)
     if proc.returncode == PROBE_FAILED_EXIT and b"sandbox:" in err:
         raise SandboxUnavailable("The sandbox could not make the system read-only, so code execution is off.")
     if proc.returncode != 0 and b"unshare:" in err[:200]:
         raise SandboxUnavailable("Linux namespaces are not available on this worker, so code execution is off.")
-    cap = settings.sandbox_max_output_bytes
-    truncated = len(out) > cap or len(err) > cap
+    truncated = flooded or len(out) > cap or len(err) > cap
     return SandboxResult(
         exit_code=proc.returncode if not timed_out else -9,
         stdout=out[:cap].decode("utf-8", errors="replace"),
@@ -170,6 +176,55 @@ def _run(settings: Settings, code: str) -> SandboxResult:
         truncated=truncated,
         duration_ms=int((time.monotonic() - started) * 1000),
     )
+
+
+def _collect(proc: subprocess.Popen[bytes], stdin: bytes, timeout: float, cap: int) -> tuple[bytes, bytes, bool, bool]:
+    """Read stdout/stderr incrementally, never holding more than cap+1 bytes of each.
+    Kills the process group on timeout or when output exceeds the cap."""
+    import threading
+
+    bufs: dict[str, bytearray] = {"out": bytearray(), "err": bytearray()}
+    flooded = threading.Event()
+
+    def kill() -> None:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+
+    def reader(name: str, stream: Any) -> None:
+        buf = bufs[name]
+        while chunk := stream.read(65536):
+            room = cap + 1 - len(buf)
+            if room > 0:
+                buf.extend(chunk[:room])
+            if len(buf) > cap:
+                flooded.set()
+                kill()
+                break
+        with contextlib.suppress(Exception):
+            stream.close()
+
+    threads = [
+        threading.Thread(target=reader, args=("out", proc.stdout), daemon=True),
+        threading.Thread(target=reader, args=("err", proc.stderr), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    try:
+        assert proc.stdin is not None
+        proc.stdin.write(stdin)
+        proc.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill()
+        proc.wait()
+    for t in threads:
+        t.join(timeout=2)
+    return bytes(bufs["out"]), bytes(bufs["err"]), timed_out and not flooded.is_set(), flooded.is_set()
 
 
 def run_python(code: str, settings: Settings | None = None) -> SandboxResult:

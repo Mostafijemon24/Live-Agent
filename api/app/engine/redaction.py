@@ -17,10 +17,13 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("slack_token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b")),
     ("google_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
     ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}")),
+    ("basic_auth", re.compile(r"(?i)\bbasic\s+[A-Za-z0-9+/]{8,}={0,2}")),
     (
         "credential",
+        # key (any prefix, optional quotes incl. escaped JSON quotes) + separator + value; only the value is replaced
         re.compile(
-            r"(?i)\b(password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|token)\s*[:=]\s*[^\s\"'`,;&<>]+"
+            r"(?i)((?:\\?[\"'])?[\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)"
+            r"(?:\\?[\"'])?\s*[:=]\s*(?:\\?[\"'])?)([^\s\"'`,;&<>\\]+)"
         ),
     ),
     ("db_url", re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:[^\s@/]+@[^\s/]+")),
@@ -66,7 +69,7 @@ def redact(text: str, *, keep_emails: bool = False) -> Redacted:
             if kind == "credential":
                 count += 1
                 kinds.append(kind)
-                return f"{m.group(1)}=[REDACTED]"
+                return f"{m.group(1)}[REDACTED]"
             count += 1
             kinds.append(kind)
             return f"[REDACTED:{kind}]"

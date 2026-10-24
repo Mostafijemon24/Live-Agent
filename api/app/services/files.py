@@ -206,7 +206,7 @@ def download(ctx: Context, file_id: uuid.UUID) -> tuple[FileRecord, Iterator[byt
     f = get_file(ctx, file_id)
     if f.status == FileStatus.quarantined.value:
         raise ApiError(403, "file_quarantined", "This file is quarantined and can't be opened.")
-    if not storage().exists(f.storage_key):
+    if not f.storage_key.startswith(f"{ctx.workspace.id}/") or not storage().exists(f.storage_key):
         raise ApiError(410, "file_unavailable", "The stored copy of this file is unavailable.")
     ctx.log("file.downloaded", "file", f"{f.original_name} downloaded", target_type="file", target_id=str(f.id))
     return f, storage().open(f.storage_key)
@@ -218,7 +218,7 @@ def artifact_download(ctx: Context, artifact_id: uuid.UUID) -> tuple[str, Iterat
     a = ctx.db.execute(
         select(Artifact).where(Artifact.workspace_id == ctx.workspace.id, Artifact.id == artifact_id)
     ).scalar_one_or_none()
-    if a is None or not a.storage_key:
+    if a is None or not a.storage_key or not a.storage_key.startswith(f"{ctx.workspace.id}/"):
         raise ctx.deny("artifact", artifact_id, "report")
     if not storage().exists(a.storage_key):
         raise ApiError(410, "file_unavailable", "The stored copy of this report is unavailable.")

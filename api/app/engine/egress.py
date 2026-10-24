@@ -87,9 +87,14 @@ def host_allowed(host: str, allowed: Iterable[str]) -> bool:
     return False
 
 
+_EXTRA_BLOCKED = (ipaddress.ip_network("fec0::/10"),)  # deprecated site-local IPv6
+
+
 def _ip_is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         return _ip_is_public(ip.ipv4_mapped)
+    if any(ip in n for n in _EXTRA_BLOCKED):
+        return False
     return bool(
         ip.is_global
         and not ip.is_multicast
@@ -191,6 +196,7 @@ class EgressClient:
         timeout = timeout or self.settings.egress_timeout_seconds
         cap = max_bytes or self.settings.egress_max_bytes
         started = time.monotonic()
+        deadline = started + 2 * timeout  # overall cap: a slow-drip response can't keep a worker busy
         current = url
         first_host = normalize_host(urlsplit(url).hostname or "")
         for _hop in range(self.settings.egress_max_redirects + 1):
@@ -209,6 +215,8 @@ class EgressClient:
                         body = bytearray()
                         truncated = False
                         for chunk in resp.iter_bytes():
+                            if time.monotonic() > deadline:
+                                raise EgressFailed("timeout", f"{host} sent its response too slowly.")
                             body.extend(chunk)
                             if len(body) > cap:
                                 del body[cap:]

@@ -81,11 +81,14 @@ def _fail_step(
         queue=JobQueue.orchestrator,
         task_id=task.id,
         settings=settings,
+        internal=True,
     )
 
 
 def handle_tool_run(db: Session, job: Q.ClaimedJob, settings: Settings, factory: sessionmaker[Session]) -> None:
     # ---------------- phase A: verify under locks
+    if job.locked_by and not Q.still_owned(db, job):
+        return
     task, step = _load(db, job, lock=True)
     if task is None or step is None or step.plan_version != task.plan_version:
         return
@@ -147,6 +150,7 @@ def handle_tool_run(db: Session, job: Q.ClaimedJob, settings: Settings, factory:
             queue=JobQueue.orchestrator,
             task_id=task.id,
             settings=settings,
+            internal=True,
         )
         return
     external_ok = decision.outcome == "allow" and decision.data_leaves
@@ -171,7 +175,10 @@ def handle_tool_run(db: Session, job: Q.ClaimedJob, settings: Settings, factory:
         reason = None
         if a is None:
             reason = "no approval on record"
-        elif not retry_of_same:
+        elif retry_of_same and not tool.idempotent:
+            reason = "this action is not safe to repeat automatically"
+        else:
+            # Full re-verification, also for a retry (expiry, approver role, targets, policy, signature).
             reason = verify_binding(
                 db,
                 a,
@@ -181,6 +188,7 @@ def handle_tool_run(db: Session, job: Q.ClaimedJob, settings: Settings, factory:
                 targets=list(step.destinations),
                 step_id=step.id,
                 policy_version=POLICY_VERSION,
+                allow_consumed=retry_of_same,
             )
         if reason is not None:
             if a is not None and a.status == ApprovalStatus.approved.value:
@@ -204,6 +212,7 @@ def handle_tool_run(db: Session, job: Q.ClaimedJob, settings: Settings, factory:
                 queue=JobQueue.orchestrator,
                 task_id=task.id,
                 settings=settings,
+                internal=True,
             )
             return
         assert a is not None
@@ -261,7 +270,10 @@ def handle_tool_run(db: Session, job: Q.ClaimedJob, settings: Settings, factory:
         if fut.done():
             tool_db.close()
 
-    # ---------------- phase C: record
+    # ---------------- phase C: record (only if this worker still owns the job)
+    if job.locked_by and not Q.still_owned(db, job):
+        db.rollback()
+        return
     task, step = _load(db, job, lock=True)
     if task is None or step is None:
         return
@@ -277,7 +289,7 @@ def handle_tool_run(db: Session, job: Q.ClaimedJob, settings: Settings, factory:
         )
         return
     if error is not None:
-        if error.retryable and job.attempts < job.max_attempts:
+        if error.retryable and tool.idempotent and job.attempts < job.max_attempts:
             event(
                 db,
                 task,
@@ -338,6 +350,7 @@ def handle_tool_run(db: Session, job: Q.ClaimedJob, settings: Settings, factory:
         queue=JobQueue.orchestrator,
         task_id=task.id,
         settings=settings,
+        internal=True,
     )
 
 

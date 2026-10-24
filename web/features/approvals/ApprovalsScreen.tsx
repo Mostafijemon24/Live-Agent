@@ -112,7 +112,7 @@ export function ApprovalsScreen() {
         <span>
           {DEMO_MODE
             ? "Demo: decisions only change status here. No action is executed and nothing is sent anywhere."
-            : "Decisions are saved and logged. No action is executed yet — the execution engine and policy checks arrive in Phase 3."}
+            : "Each approval covers one exact action, once. It is checked again right before running and refused if anything changed."}
         </span>
       </div>
 

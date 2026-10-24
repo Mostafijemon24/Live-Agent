@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRef, useState, type KeyboardEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, DEMO_MODE, errorMessage, type FileClassification, type FileItem } from "@/lib/api";
+import { api, DEMO_MODE, errorMessage, isApiError, type FileClassification, type FileItem } from "@/lib/api";
 import { CLASSIFICATION, FILE_STATUS } from "@/lib/labels";
 import { fmtBytes, fmtDateTime } from "@/lib/format";
 import { Drawer, ErrorState, Icon, Skeleton } from "@/components/ui";
@@ -11,11 +11,11 @@ import { useUi } from "@/lib/session";
 import { DeleteFileModal } from "./DeleteFileModal";
 import { SCAN_TEXT, fileIcon, isBusy } from "./shared";
 
-const CLS_ORDER: FileClassification[] = ["private", "approved_integration", "public", "unknown"];
+const CLS_ORDER: FileClassification[] = ["confidential", "internal", "public", "unknown"];
 
 const CLS_TOAST = DEMO_MODE
   ? "Classification changed (demo). In production this is logged and checked by the policy engine."
-  : "Classification saved. It is logged in the audit trail; the policy engine that enforces it arrives in Phase 3.";
+  : "Classification saved and logged. The policy engine uses it before any step that could send this file anywhere.";
 
 const BTN = "inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-[13.5px] font-medium whitespace-nowrap hover:no-underline";
 
@@ -66,7 +66,13 @@ export function FileDrawer({ fileId, fallback, onClose }: { fileId: string; fall
     return (
       <>
         <Drawer label="File details" onClose={onClose} header={header}>
-          {q.isError ? (
+          {q.isError && isApiError(q.error) && q.error.status === 410 ? (
+            <div role="status" className="flex flex-col items-start gap-2 text-[13.5px]">
+              <Icon name="trash-2" size={20} className="text-muted" />
+              <div className="font-semibold">This file was deleted</div>
+              <p className="text-muted [text-wrap:pretty]">{q.error.message}</p>
+            </div>
+          ) : q.isError ? (
             <ErrorState error={q.error} onRetry={() => void q.refetch()} retrying={q.isFetching} title="We couldn't load this file" />
           ) : (
             <Skeleton lines={6} />

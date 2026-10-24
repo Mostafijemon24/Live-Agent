@@ -288,7 +288,7 @@ def connect_wordpress(ctx: Context, body: S.ConnectWordPressIn) -> None:
         kind="integration.verify",
         queue=JobQueue.tools,
         payload={"key": "wordpress"},
-        dedupe_key=f"verify:wordpress:{utcnow():%Y%m%d%H%M%S%f}",
+        dedupe_key=f"verify:wordpress:{body.site_url}:{utcnow():%Y%m%d%H%M}",  # at most one check per site per minute
         max_attempts=2,
     )
     ctx.log(

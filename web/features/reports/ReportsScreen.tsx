@@ -10,7 +10,7 @@ import { useUi } from "@/lib/session";
 import { Badge, Button, EmptyState, ErrorState, Icon, PageHeader, Skeleton } from "@/components/ui";
 
 const EXPORT_BODY =
-  "Exports are generated on the server and checked for confidential content first. Logs are redacted of tokens, passwords and personal data. Report export arrives in Phase 3.";
+  "Reports are stored privately and downloaded as attachments. Bulk export of logs is not built yet.";
 
 type Filter = ActivityType | "all";
 const FILTERS: { k: Filter; label: string }[] = [
@@ -79,7 +79,7 @@ function ReportsSection() {
         ) : reports.length === 0 ? (
           <div className="rounded-[10px] border border-line bg-surface">
             <EmptyState icon="file-text" title="No reports yet">
-              {DEMO_MODE ? "Reports appear here when tasks finish." : "Reports appear here when the execution engine (Phase 3) finishes tasks."}
+              {DEMO_MODE ? "Reports appear here when tasks finish." : "Reports appear here when a task’s “Write a report” step finishes."}
             </EmptyState>
           </div>
         ) : (

@@ -115,3 +115,57 @@ def test_readonly_role_cannot_write(role_engines: dict[str, Any], seeded: Any) -
     assert _ok(r, "SELECT count(*) FROM tasks")
     _denied(r, "UPDATE tasks SET title = title")
     _denied(r, "INSERT INTO audit_events (id) VALUES (gen_random_uuid())")
+
+
+def _decided_approval(api: Any, owner_engine: Any) -> str:
+    f = upload(api, "z.csv").json()
+    a = api.post(f"/files/{f['id']}/deletion-request", {"reason": "cleanup"}).json()
+    api.post(
+        f"/approvals/{a['id']}/decision", {"decision": "approve", "acknowledged": True, "confirmed_items": ["z.csv"]}
+    )
+    with owner_engine.begin() as c:  # the deletion service consumed it
+        c.execute(text("UPDATE approval_requests SET execution_state = 'executed' WHERE id = :a"), {"a": a["id"]})
+    return str(a["id"])
+
+
+def test_worker_cannot_revive_or_redecide_approvals(
+    make_user: Any, role_engines: dict[str, Any], owner_engine: Any
+) -> None:
+    """P3-SR-5 regression: one-time approvals stay one-time even for a compromised worker."""
+    from sqlalchemy.exc import DBAPIError
+
+    aid = _decided_approval(make_user(), owner_engine)
+    w = role_engines["worker"]
+    for sql in (
+        "UPDATE approval_requests SET status = 'pending' WHERE id = :a",
+        "UPDATE approval_requests SET decided_by = NULL WHERE id = :a",
+        "UPDATE approval_requests SET payload_hash = 'x' WHERE id = :a",
+    ):
+        _denied(w, sql, a=aid)
+    with pytest.raises(DBAPIError, match="cannot go from executed to pending_execution"), w.begin() as c:
+        c.execute(text("UPDATE approval_requests SET execution_state = 'pending_execution' WHERE id = :a"), {"a": aid})
+    # Even the schema owner can't revive it (trigger applies to every role).
+    with pytest.raises(DBAPIError), owner_engine.begin() as c:
+        c.execute(text("UPDATE approval_requests SET status = 'rejected' WHERE id = :a"), {"a": aid})
+
+
+def test_worker_cannot_weaken_task_classification(seeded: Any, role_engines: dict[str, Any]) -> None:
+    w = role_engines["worker"]
+    _denied(w, "UPDATE tasks SET data_classification = 'public' WHERE id = :t", t=seeded["task"]["id"])
+    _denied(w, "UPDATE tasks SET prompt = 'x' WHERE id = :t", t=seeded["task"]["id"])
+    with w.begin() as c:
+        c.execute(text("UPDATE tasks SET updated_at = updated_at WHERE id = :t"), {"t": seeded["task"]["id"]})
+
+
+def test_api_role_cannot_insert_pre_deleted_files(seeded: Any, role_engines: dict[str, Any]) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    with pytest.raises(DBAPIError, match="only by the deletion service"), role_engines["app"].begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO files (workspace_id, original_name, storage_key, content_type, type_label, size_bytes, sha256,"
+                " status, scan_status, classification, collection, uploaded_by, deleted_at)"
+                " SELECT workspace_id, 'x', 'k', 't', 'TXT', 1, 's', 'ready', 'pending', 'unknown', 'Research', uploaded_by, now()"
+                " FROM files LIMIT 1"
+            )
+        )

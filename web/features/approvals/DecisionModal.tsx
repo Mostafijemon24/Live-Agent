@@ -22,9 +22,9 @@ const DECISION: Record<DecisionKind, ApprovalDecision> = {
 
 const ACK_COPY = DEMO_MODE
   ? "I understand this is a simulated approval. Nothing will actually run."
-  : "I understand approving records my decision only. Nothing will run until the execution engine is installed (Phase 3).";
+  : "I understand this approves this exact action once. If anything about it changes before it runs, it will need a new approval.";
 
-/** Toast copy after a successful decision — prototype copy in demo, the Phase 2 truth otherwise. */
+/** Toast copy after a successful decision — prototype copy in demo, the real outcome otherwise. */
 function successToast(kind: DecisionKind): { text: string; tone: "success" | "info" } {
   if (DEMO_MODE) {
     if (kind === "approve") return { text: "Approval recorded (simulated). Nothing was executed — no backend is connected.", tone: "success" };
@@ -32,7 +32,7 @@ function successToast(kind: DecisionKind): { text: string; tone: "success" | "in
     return { text: "Change request added to the task (simulated).", tone: "success" };
   }
   if (kind === "reject") return { text: "Rejected and recorded. The Agent will not perform this action.", tone: "info" };
-  return { text: "Decision recorded. Nothing was executed — the execution engine isn't installed yet.", tone: "success" };
+  return { text: "Decision recorded. If approved, the action runs once after a final check.", tone: "success" };
 }
 
 /** The approve / reject / request-changes dialogs (prototype modal.is.approve|reject|changes). */

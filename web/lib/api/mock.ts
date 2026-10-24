@@ -7,6 +7,8 @@ import { ApiError, type AgentApi } from "./client";
 import type {
   AccountRequest,
   ActivityEvent,
+  AgentStatus,
+  AgentTool,
   ActivityType,
   AiRules,
   Approval,
@@ -193,8 +195,8 @@ const FILE_STATUS: Record<string, FileStatus> = {
   Quarantined: "quarantined",
 };
 const CLS: Record<string, FileClassification> = {
-  Private: "private",
-  "Approved for selected integration": "approved_integration",
+  Confidential: "confidential",
+  Internal: "internal",
   Public: "public",
   Unknown: "unknown",
 };
@@ -395,7 +397,11 @@ function seed(): DemoState {
     last_activity: i.last,
     destination: i.dest,
     scopes: [...i.scopes],
-    connectable: false,
+    connectable: i.id === "wordpress",
+    operational: i.id === "wordpress",
+    mode: i.id === "wordpress" ? "read-only (public REST API, no credentials) — demo sandbox" : "not built",
+    site_url: null,
+    error_message: null,
   }));
 
   const activity: ActivityEvent[] = D.ACT.map((a, i) => ({
@@ -702,6 +708,33 @@ const sortTitle = (a: string, b: string) => a.localeCompare(b);
 
 // ---------------------------------------------------------------- the API
 
+function demoAgentStatus(): AgentStatus {
+  return {
+    status: "not_connected",
+    planner: "not_connected",
+    queue: "not_configured",
+    message: "Demo mode — every result here is sample data. The demo agent does not touch any real system.",
+    provider: {
+      key: "demo",
+      label: "Demo (sample data, no AI)",
+      model: "none",
+      location: "local",
+      configured: false,
+      data_disclosure: "Demo mode: nothing is sent anywhere. All plans and results are pre-written samples.",
+    },
+    workers: ["orchestrator", "tools", "deletion", "scheduler"].map((kind) => ({ kind, alive: false, last_heartbeat: null })),
+    queue_depth: {},
+    policy_version: null,
+  };
+}
+
+const DEMO_TOOLS: AgentTool[] = [
+  { id: "files.analyze", label: "Analyse an attached file", description: "Counts rows, columns, empty cells and frequent values.", impact: "none", risk: "read_only", available: true, unavailable_reason: null },
+  { id: "seo.audit", label: "SEO audit of a page (read-only)", description: "Checks one page on an allowed domain.", impact: "external_read", risk: "read_only", available: true, unavailable_reason: null },
+  { id: "report.write", label: "Write a report", description: "Writes a markdown report into the workspace.", impact: "workspace_write", risk: "workspace_only", available: true, unavailable_reason: null },
+  { id: "wordpress.write", label: "WordPress: change content", description: "Not built yet.", impact: "production_change", risk: "production_change", available: false, unavailable_reason: "Not built yet." },
+];
+
 export class MockAgentApi implements AgentApi {
   readonly mode = "demo" as const;
 
@@ -809,12 +842,7 @@ export class MockAgentApi implements AgentApi {
     const pending = s.approvals.filter((a) => a.status === "pending");
     const weekAgo = Date.now() - 7 * DAY;
     return clone({
-      agent: {
-        status: "not_connected" as const,
-        planner: "not_connected" as const,
-        queue: "not_configured" as const,
-        message: "Demo mode — every result here is sample data. The demo agent does not touch any real system.",
-      },
+      agent: demoAgentStatus(),
       counts: {
         in_progress: count(["queued", "planning", "running"]),
         awaiting_approval_plans: count(["awaiting_approval"]),
@@ -828,6 +856,18 @@ export class MockAgentApi implements AgentApi {
       recent_activity: s.activity.slice(0, 6),
       unread_notifications: s.notifications.filter((n) => n.unread).length,
     });
+  }
+
+  async getAgentStatus(): Promise<AgentStatus> {
+    await latency();
+    this.requireAuth();
+    return clone(demoAgentStatus());
+  }
+
+  async getAgentTools(): Promise<AgentTool[]> {
+    await latency();
+    this.requireAuth();
+    return clone(DEMO_TOOLS);
   }
 
   // ------------------------------------------------------------ tasks
@@ -874,9 +914,6 @@ export class MockAgentApi implements AgentApi {
     const prompt = (input.prompt ?? "").trim();
     if (prompt.length < 12) throw invalid("Describe the task in a sentence or two so the Agent can plan it.", "prompt");
     if (prompt.length > 4000) throw invalid("Keep the description under 4,000 characters.", "prompt");
-    if (input.mode === "execute") {
-      throw invalid("“Execute approved steps” is disabled until the execution engine and policy engine are installed.", "mode");
-    }
     const attachments: TaskAttachment[] = (input.attachment_file_ids ?? []).map((fid) => {
       const f = s.files.find((x) => x.id === fid);
       if (!f) throw invalid("One of the attached files no longer exists. Remove it and try again.", "attachment_file_ids");
@@ -1055,6 +1092,7 @@ export class MockAgentApi implements AgentApi {
     await latency();
     const s = this.requireAuth();
     const q = (query.q ?? "").trim().toLowerCase();
+    if (query.deleted) return clone({ ...paginate([] as FileItem[], query.page, query.page_size ?? 50), collections: [] });
     const list = s.files.filter(
       (f) =>
         (!query.collection || query.collection === "All files" || f.collection === query.collection) &&
@@ -1172,6 +1210,18 @@ export class MockAgentApi implements AgentApi {
     return null; // demo files have no content
   }
 
+  async restoreFile(id: string): Promise<FileItem> {
+    await latency();
+    this.requireAuth();
+    void id;
+    throw conflict("file_not_deleted", "Demo files are never deleted, so there is nothing to restore.");
+  }
+
+  artifactDownloadUrl(_id: string): string | null {
+    void _id;
+    return null; // demo reports have no stored file
+  }
+
   // ------------------------------------------------------------ automations
   async listAutomations(): Promise<Automation[]> {
     await latency();
@@ -1207,7 +1257,7 @@ export class MockAgentApi implements AgentApi {
       file_scope: input.file_scope,
       approval_policy: input.approval_policy,
       last_run_text: "Never run",
-      next_run_text: manual ? "Runs when you start it" : "Not scheduled — scheduler requires backend",
+      next_run_text: manual ? "Runs when you start it" : "Paused",
       enabled: manual, // scheduled automations are saved paused
       created_at: nowIso(),
     };
@@ -1275,6 +1325,20 @@ export class MockAgentApi implements AgentApi {
       "integration_not_available",
       "Connecting needs the backend. Connections use a secure sign-in flow handled by the server, with least-privilege scopes and encrypted credential storage. The demo never asks for passwords or API keys.",
     );
+  }
+
+  async connectWordPress(siteUrl: string): Promise<Integration> {
+    await latency();
+    const s = this.requireAuth();
+    const i = s.integrations.find((x) => x.key === "wordpress");
+    if (!i) throw notFound();
+    if (!/^https:\/\/[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(siteUrl.trim())) throw invalid("Enter the site's https:// address, like https://example.com", "site_url");
+    i.status = "demo";
+    i.site_url = siteUrl.trim().replace(/\/$/, "");
+    i.error_message = null;
+    i.last_activity = "Demo sandbox — no request was made to " + i.site_url;
+    addActivity("integration", "integration.connect_requested", `WordPress demo connection for ${i.site_url} (sample data, nothing contacted)`);
+    return clone(i);
   }
 
   async disconnectIntegration(key: string): Promise<Integration> {
@@ -1398,7 +1462,7 @@ export class MockAgentApi implements AgentApi {
       ws.privacy_mode = input.privacy_mode;
       s.setup.privacy = true;
       const label = PRIVACY_MODES.find((p) => p.value === input.privacy_mode)?.label ?? input.privacy_mode;
-      addActivity("security", "privacy.mode_changed", `Privacy mode preference set to "${label}" (not enforced)`);
+      addActivity("security", "privacy.mode_changed", `Privacy mode set to "${label}" (demo)`);
     } else {
       addActivity("settings", "workspace.updated", "Workspace settings saved for this browser session (demo)");
     }

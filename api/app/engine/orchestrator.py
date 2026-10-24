@@ -27,7 +27,7 @@ from app.domain.enums import (
 )
 from app.engine import queue as Q
 from app.engine.canonical import args_hash as compute_args_hash
-from app.engine.canonical import sha256_hex
+from app.engine.canonical import canonical_json, sha256_hex
 from app.engine.env import build_env
 from app.engine.planner import PlanError, make_plan
 from app.engine.policy import POLICY_VERSION, Decision, evaluate_model_transfer, evaluate_step
@@ -336,13 +336,16 @@ def _step_approval(db: Session, task: Task, step: TaskStep, decision: Decision, 
         requested_by=task.created_by,
         actor_user_id=None,
         category=ApprovalCategory(decision.approval_category or ApprovalCategory.external_transfer.value),
-        title=f"T-{task.number} step {step.step_key}: {step.title}"[:300],
-        reason=" ".join(decision.reasons),
-        affected=[f"{k}: {str(v)[:120]}" for k, v in (step.args or {}).items()][:10] or [tool.label],
+        # Server-written title; the model's wording is labelled as such in the reason.
+        title=f"T-{task.number} step {step.step_key}: {tool.label}"[:300],
+        reason=" ".join(decision.reasons) + f" AI-written goal: “{step.title[:200]}”.",
+        # The exact, complete arguments (bounded by each tool's schema) — never truncated.
+        affected=[f"{k}: {v if isinstance(v, str) else canonical_json(v)}" for k, v in (step.args or {}).items()]
+        or [tool.label],
         leaves=leaves,
         destination=dest,
         scope_summary=f"{tool.label} · data: {', '.join(step.classifications) or 'none'}",
-        consequences=step.expected_output or tool.description,
+        consequences=tool.description,
         reversible="No"
         if leaves or step.impact in ("publish", "send_message", "production_change")
         else "The result stays in this workspace.",
@@ -479,6 +482,7 @@ def handle_execute(db: Session, job: Q.ClaimedJob, settings: Settings) -> None:
             max_attempts=max(1, step.max_attempts),
             payload={"plan_version": task.plan_version},
             settings=settings,
+            internal=True,
         )
         event(db, task, "step.queued", f"Step {step.step_key} queued: {step.title}")
         return

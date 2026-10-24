@@ -23,10 +23,12 @@ export function integrationLabel(key: string | null): string {
   return key.charAt(0).toUpperCase() + key.slice(1);
 }
 
-/** Phase 3 reasons a task is not moving — shown instead of the "next action" text. */
+/** Reasons a task is not moving — shown instead of the "next action" text. */
 export const WAITING_LABEL: Partial<Record<NonNullable<WaitingFor>, string>> = {
-  planning_service: "Waiting for planning service",
-  execution_engine: "Waiting for execution engine",
+  planning_service: "Waiting to be planned",
+  execution_engine: "Queued to run",
+  approval: "Waiting for your approval",
+  user_input: "Waiting for your answer",
 };
 
 export function waitingLabel(w: WaitingFor): string | null {

@@ -70,7 +70,7 @@ def test_migrations_upgrade_downgrade_upgrade() -> None:
     run_migrations(url)
     eng = create_engine(url)
     with eng.connect() as c:
-        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004"
+        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
         tables = set(c.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public'")).scalars())
     eng.dispose()
     assert {"users", "workspaces", "tasks", "audit_events", "deletion_requests", "jobs", "usage_counters"} <= tables

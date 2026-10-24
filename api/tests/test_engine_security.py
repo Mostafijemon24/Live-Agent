@@ -462,3 +462,29 @@ def test_cross_tenant_artifacts_and_tasks_are_isolated(make_user: Any, engine: A
     art = a.get(f"/tasks/{t['id']}").json()["artifacts"][0]
     assert b.get(f"/artifacts/{art['id']}/download").status_code == 404
     assert b.get(f"/tasks/{t['id']}").status_code == 404
+
+
+def test_approver_sees_the_full_arguments(make_user: Any, engine: Any) -> None:
+    """P3-SR-2 regression: nothing the approval binds is hidden or truncated."""
+    from app.engine.sandbox import isolation_status
+
+    if not isolation_status()[0]:
+        pytest.skip("sandbox unavailable on this host")
+    api = make_user()
+    code = "total = 0\n" + "".join(f"total += {i}  # line {i}\n" for i in range(40)) + "print(total)\n"
+    assert len(code) > 500
+    MOCK_SCRIPT.append(
+        json.dumps({"steps": [{"goal": "Harmless sum", "tool": "code.run_python", "args": {"code": code}}]})
+    )
+    t = create_task(api, "Add up some numbers for me please.")
+    engine.drain()
+    t = api.get(f"/tasks/{t['id']}").json()
+    step = t["plan"]["steps"][0]
+    code = code.strip()  # the schema normalises surrounding whitespace; the stored value is what is bound
+    assert step["args"] == {"code": code} and step["args_hash"]
+    _approve_all(api, t)
+    engine.drain()
+    (a,) = _pending(api, t["id"])
+    assert a["affected_items"] == [f"code: {code}"]
+    assert a["title"].endswith("Run a short Python program (sandbox)")  # server-written
+    assert "AI-written goal" in a["reason"]

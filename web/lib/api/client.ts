@@ -2,6 +2,8 @@ import type {
   AccountRequest,
   ActivityEvent,
   ActivityType,
+  AgentStatus,
+  AgentTool,
   Approval,
   ApprovalStatus,
   Artifact,
@@ -35,7 +37,7 @@ import type {
 /**
  * The single interface every screen uses. Two implementations:
  *  - HttpAgentApi: the real FastAPI backend (default).
- *  - MockAgentApi: in-browser Phase 1 demo data, only when NEXT_PUBLIC_DEMO_MODE=true.
+ *  - MockAgentApi: in-browser sample data, only when NEXT_PUBLIC_DEMO_MODE=true.
  * Errors are thrown as ApiError and must be shown to the user — never
  * swallowed or turned into a fake success.
  */
@@ -54,8 +56,10 @@ export interface AgentApi {
   resetPassword(token: string, password: string): Promise<{ message: string }>;
   completeOnboarding(input: OnboardingInput): Promise<Me>;
 
-  // dashboard
+  // dashboard & agent
   dashboard(): Promise<Dashboard>;
+  getAgentStatus(): Promise<AgentStatus>;
+  getAgentTools(): Promise<AgentTool[]>;
 
   // tasks
   listTasks(query: TaskListQuery): Promise<Page<TaskSummary>>;
@@ -82,6 +86,9 @@ export interface AgentApi {
   updateFile(id: string, patch: { classification?: FileClassification; collection?: string }): Promise<FileItem>;
   requestFileDeletion(id: string, reason: string): Promise<Approval>;
   fileDownloadUrl(id: string): string | null; // null in demo mode
+  /** Owner/admin: restore a deleted file during the retention window (queued to the deletion service). */
+  restoreFile(id: string): Promise<FileItem>;
+  artifactDownloadUrl(id: string): string | null; // null in demo mode
 
   // automations
   listAutomations(): Promise<Automation[]>;
@@ -92,6 +99,8 @@ export interface AgentApi {
   // integrations
   listIntegrations(): Promise<Integration[]>;
   connectIntegration(key: string): Promise<Integration>;
+  /** WordPress read-only: public REST API, no credentials. Verified by a worker before "connected". */
+  connectWordPress(siteUrl: string): Promise<Integration>;
   disconnectIntegration(key: string): Promise<Integration>;
 
   // reports & activity

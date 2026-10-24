@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AgentStatusCard } from "@/features/agent/AgentStatusCard";
 import { api, DEMO_MODE, errorMessage, type PrivacyMode, type SecurityCheck, type SecurityStatus } from "@/lib/api";
 import { useUi } from "@/lib/session";
 import { APPROVAL_STATUS, INTEGRATION_STATUS, PRIVACY_MODES } from "@/lib/labels";
@@ -49,8 +50,8 @@ function PrivacyModeCard({ status }: { status: SecurityStatus }) {
       qc.invalidateQueries({ queryKey: ["settings"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       if (res.enforced) toast("Saved.", "success");
-      else if (DEMO_MODE) toast("Saved as a preference. Not enforced — backend setup required.", "info");
-      else toast("Saved. Not enforced yet — the policy engine arrives in Phase 3.", "info");
+      else if (DEMO_MODE) toast("Saved for this demo session only.", "info");
+      else toast("Saved, but this server reports it is not enforced.", "info");
     },
     onError: (e) => toast(errorMessage(e), "danger"),
   });
@@ -77,7 +78,7 @@ function PrivacyModeCard({ status }: { status: SecurityStatus }) {
           <Badge meta={{ fg: "#16803C", bg: "#ECFDF3", icon: "circle-check" }}>Enforced</Badge>
         ) : (
           <span className="rounded-md bg-warning-soft px-2 py-0.5 text-xs font-medium text-warning">
-            {DEMO_MODE ? "Not enforced — backend setup required" : "Not enforced yet — policy engine arrives in Phase 3"}
+            {DEMO_MODE ? "Demo — not enforced" : "Not enforced on this server"}
           </span>
         )}
       </div>
@@ -146,6 +147,7 @@ function IntegrationPermissions() {
 // ------------------------------------------------------------------ page
 export function SecurityPage() {
   const q = useQuery({ queryKey: ["security"], queryFn: () => api.securityStatus() });
+  const agent = useQuery({ queryKey: ["agent-status"], queryFn: () => api.getAgentStatus(), staleTime: 30_000 });
   const [modal, setModal] = useState<"export" | "delete" | null>(null);
 
   const header = <PageHeader title="Security & Privacy" subtitle="Control what the Agent can share, and see what it was stopped from doing." />;
@@ -177,7 +179,7 @@ export function SecurityPage() {
     <div data-screen-label="Security" className="flex flex-col gap-4">
       {header}
 
-      {incomplete && (
+      {!s.privacy_enforced && (
         <div role="alert" className="flex gap-3 rounded-[10px] border border-danger-line bg-danger-soft px-4 py-3.5">
           <Icon name="shield-alert" size={18} className="mt-px text-danger" />
           <div>
@@ -185,7 +187,7 @@ export function SecurityPage() {
             <div className="mt-0.5 text-[13.5px] text-ink-2 [text-wrap:pretty]">
               {DEMO_MODE
                 ? "These are demonstration settings. They do not protect any data until a backend policy engine enforces them."
-                : "Your choices below are saved, but they are preferences only. They do not protect any data until the policy engine enforces them (Phase 3)."}
+                : "This server reports the policy engine is not enforcing your privacy choices. Treat them as preferences only."}
             </div>
           </div>
         </div>
@@ -195,9 +197,11 @@ export function SecurityPage() {
         <Icon name="shield-check" size={18} className="mt-px text-primary" />
         <span className="[text-wrap:pretty]">
           <strong>Uploading a file does not authorise sharing it with an external AI provider or connected app.</strong> Sharing always needs a separate approval, and files
-          marked Unknown can&apos;t be shared at all.
+          marked Unclassified can&apos;t be shared at all.
         </span>
       </div>
+
+      <AgentStatusCard agent={agent.data} />
 
       <PrivacyModeCard status={s} />
 
@@ -209,9 +213,9 @@ export function SecurityPage() {
           </div>
           <ul className="m-0 flex list-none flex-col gap-2 p-0 text-[13.5px]">
             {[
-              "Task text may be processed by an AI provider once one is configured.",
-              "Files are never sent without a per-action approval.",
-              "Private and Unknown files are blocked from external transfer by default.",
+              "Data reaches an external AI model only after the policy engine allows it — confidential data needs a one-time approval.",
+              "Unclassified data never leaves the workspace.",
+              "Known secret patterns (keys, tokens, passwords) are redacted before anything is sent; this reduces, but cannot rule out, accidental exposure.",
             ].map((t) => (
               <li key={t} className="flex gap-2">
                 <Icon name="circle-check" size={15} className="mt-0.5 text-success" />
@@ -294,10 +298,10 @@ export function SecurityPage() {
           <h2 className="px-5 pb-1 pt-4 text-[15px] font-semibold">Security configuration checklist</h2>
           <p className="px-5 pb-2.5 text-[12.5px] text-muted">
             {enforcedN === 0
-              ? "All items are handled by the backend and are not set up yet."
+              ? "None of these items is enforced on this server."
               : enforcedN === s.checklist.length
-                ? "Every item is in place."
-                : `${enforcedN} of ${s.checklist.length} in place. The rest arrive in later phases.`}
+                ? "Every listed item is enforced. That still isn’t a guarantee of complete security."
+                : `${enforcedN} of ${s.checklist.length} enforced. Items marked partial or not configured are listed honestly below.`}
           </p>
           {s.checklist.map((c) => {
             const meta = CHECK_META[c.status];

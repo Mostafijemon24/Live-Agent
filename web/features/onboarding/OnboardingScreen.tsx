@@ -98,17 +98,17 @@ export function OnboardingScreen() {
       label: "Important actions",
       value: DEMO_MODE
         ? `${rulesOn} of 4 safety approvals on — preferences until the backend enforces them`
-        : `${rulesOn} of 4 safety approvals on — saved preferences, not enforced until the policy engine is installed`,
+        : `${rulesOn} of 4 safety approvals on — high-impact actions always ask, whatever these switches say`,
     },
     connected.length
       ? { ok: true, label: "Integrations", value: `${connected.map((i) => i.name).join(", ")} connected` }
-      : { ok: false, label: "Integrations", value: DEMO_MODE ? "None connected — backend required" : "None connected — connection flows are not installed yet" },
+      : { ok: false, label: "Integrations", value: DEMO_MODE ? "None connected — backend required" : "None connected — WordPress (read-only) can be connected later" },
     {
       ok: false,
       label: "Security",
       value: DEMO_MODE
         ? "Backend security controls are not configured yet"
-        : "Account security is active. File scanning and policy enforcement are not installed yet",
+        : "Account security and the policy engine are active. Malware scanning is not configured yet",
     },
   ];
 
@@ -208,7 +208,7 @@ export function OnboardingScreen() {
               <StepTitle title="How should it handle important actions?">
                 {DEMO_MODE
                   ? "We recommend keeping all of these on. They are preferences until the backend policy engine enforces them."
-                  : "We recommend keeping all of these on. They are saved as preferences — not enforced until the policy engine is installed."}
+                  : "We recommend keeping all of these on. Publishing, sending, deleting and live changes always need approval regardless; these switches can only make the rules stricter."}
               </StepTitle>
               <div className="flex flex-col rounded-[10px] border border-line">
                 {RULES.map((r) => (
@@ -229,7 +229,7 @@ export function OnboardingScreen() {
               <StepTitle title="Connect tools later">
                 {DEMO_MODE
                   ? "Connections need a secure backend flow, so none can be set up in this prototype. You'll never be asked to paste a password or API key into chat."
-                  : "Connections need a secure sign-in flow that isn't installed yet, so none can be set up right now. You'll never be asked to paste a password or API key into chat."}
+                  : "WordPress (read-only, no credentials) can be connected from the Integrations page after setup. Other integrations are not built yet. You'll never be asked to paste a password or API key into chat."}
               </StepTitle>
               {integrations.isLoading ? (
                 <Skeleton lines={4} />
