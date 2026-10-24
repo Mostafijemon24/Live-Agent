@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/* Design tokens from the approved Phase 1 prototype (project/docs/DESIGN_REVIEW.md). */
+@theme {
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --color-primary: #3448c5;
+  --color-primary-hover: #2a3aa8;
+  --color-primary-soft: #eef1fc;
+  --color-primary-line: #c7d0f5;
+  --color-primary-tint: #f5f7fe;
+
+  --color-ink: #172033;
+  --color-ink-2: #344054;
+  --color-ink-3: #475467;
+  --color-muted: #667085;
+  --color-faint: #98a2b3;
+
+  --color-page: #f6f8fb;
+  --color-surface: #ffffff;
+  --color-subtle: #f9fafb;
+  --color-line: #e4e7ec;
+  --color-line-strong: #d0d5dd;
+  --color-line-soft: #f2f4f7;
+  --color-track: #eaecf0;
+  --color-neutral-soft: #f2f4f7;
+
+  --color-success: #16803c;
+  --color-success-soft: #ecfdf3;
+  --color-success-line: #abefc6;
+  --color-warning: #b54708;
+  --color-warning-soft: #fff6ed;
+  --color-warning-line: #fedf89;
+  --color-danger: #b42318;
+  --color-danger-soft: #fef3f2;
+  --color-danger-line: #fecdca;
+  --color-info: #175cd3;
+  --color-info-soft: #eff8ff;
+
+  --radius-control: 8px;
+  --radius-card: 10px;
+  --radius-dialog: 12px;
+
+  --shadow-menu: 0 12px 24px -8px rgba(16, 24, 40, 0.16);
+  --shadow-dialog: 0 24px 48px -12px rgba(16, 24, 40, 0.25);
+  --shadow-hero: 0 12px 32px -12px rgba(16, 24, 40, 0.18);
+
+  --animate-spin-slow: stw-spin 1s linear infinite;
+  --animate-pulse-soft: stw-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes stw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes stw-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body {
+    margin: 0;
+    background: var(--color-page);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+    color: inherit;
+    font-size: inherit;
+  }
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  a {
+    color: var(--color-primary);
+    text-decoration: none;
+  }
+  a:hover {
+    color: var(--color-primary-hover);
+    text-decoration: underline;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+  input:focus,
+  select:focus,
+  textarea:focus {
+    outline: none;
+    border-color: var(--color-primary) !important;
+    box-shadow: 0 0 0 3px rgba(52, 72, 197, 0.15);
+  }
+  h1,
+  h2,
+  h3,
+  p {
+    margin: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

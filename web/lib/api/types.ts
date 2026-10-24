@@ -1,0 +1,447 @@
+// API contract types. These mirror the FastAPI Pydantic schemas in
+// api/app/schemas and are documented in API_CONTRACT.md. Wire values are
+// snake_case enums; user-facing labels live in lib/labels.ts.
+
+export type UUID = string;
+export type ISODate = string;
+
+// ---------- common ----------
+export interface Page<T> {
+  items: T[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface ApiErrorBody {
+  error: {
+    code: string;
+    message: string;
+    request_id: string;
+    details?: Record<string, unknown> | { field: string; message: string }[] | null;
+  };
+}
+
+// ---------- auth / me ----------
+export type WorkspaceRole = "owner" | "admin" | "member" | "viewer";
+
+export interface User {
+  id: UUID;
+  name: string;
+  email: string;
+  email_verified: boolean;
+  onboarding_completed: boolean;
+  created_at: ISODate;
+}
+
+export interface WorkspaceSummary {
+  id: UUID;
+  name: string;
+  role: WorkspaceRole;
+}
+
+export interface Me {
+  user: User;
+  workspace: WorkspaceSummary;
+  demo: boolean; // true only for the in-browser MockAgentApi
+}
+
+export interface RegisterInput {
+  name: string;
+  email: string;
+  password: string;
+  accept_terms: boolean;
+}
+export interface LoginInput {
+  email: string;
+  password: string;
+}
+
+// ---------- tasks ----------
+export type TaskStatus =
+  | "draft"
+  | "queued"
+  | "planning"
+  | "awaiting_approval"
+  | "running"
+  | "needs_input"
+  | "completed"
+  | "failed"
+  | "paused"
+  | "cancelled"
+  | "partially_completed";
+
+export type TaskType = "research" | "website" | "seo_content" | "code" | "browser" | "file_analysis" | "custom";
+export type TaskPriority = "normal" | "high";
+export type ExecutionMode = "plan_only" | "prepare" | "execute";
+/** Why a task is not moving. `planning_service` / `execution_engine` mean the Phase 3 engine is not installed. */
+export type WaitingFor = "planning_service" | "execution_engine" | "user_input" | "approval" | null;
+
+export type StepRisk =
+  | "read_only"
+  | "workspace_only"
+  | "prepare_only"
+  | "production_change"
+  | "publish"
+  | "external_transfer";
+
+export type StepState =
+  | "not_started"
+  | "in_progress"
+  | "done"
+  | "failed"
+  | "paused"
+  | "waiting_for_input"
+  | "skipped"
+  | "cancelled";
+
+export interface TaskStep {
+  id: UUID;
+  position: number; // 1-based
+  title: string;
+  description: string;
+  tool: string;
+  risk: StepRisk;
+  requires_approval: boolean;
+  state: StepState;
+  selected: boolean;
+  started_at: ISODate | null;
+  finished_at: ISODate | null;
+}
+
+export interface TaskPlan {
+  steps: TaskStep[];
+  data_sources: string[];
+  destination: string | null;
+}
+
+export interface TaskReport {
+  summary: string;
+  open_issues: string;
+  next_step: string;
+}
+
+export interface TaskAttachment {
+  file_id: UUID;
+  name: string;
+}
+
+export interface TaskSummary {
+  id: UUID;
+  ref: string; // "T-1048"
+  title: string;
+  status: TaskStatus;
+  type: TaskType;
+  priority: TaskPriority;
+  mode: ExecutionMode;
+  integration_key: string | null;
+  waiting_for: WaitingFor;
+  created_at: ISODate;
+  updated_at: ISODate;
+}
+
+export interface Task extends TaskSummary {
+  prompt: string;
+  question: string | null;
+  error_message: string | null;
+  attachments: TaskAttachment[];
+  plan: TaskPlan | null; // null until a planner exists (Phase 3) or in demo mode
+  report: TaskReport | null;
+  allowed_actions: TaskAction[]; // computed server-side from the state machine
+}
+
+export type TaskAction = "cancel" | "pause" | "resume" | "answer" | "approve_plan" | "reject_plan" | "revise_plan";
+
+export interface CreateTaskInput {
+  title?: string;
+  prompt: string;
+  type: TaskType;
+  priority: TaskPriority;
+  mode: ExecutionMode;
+  integration_key?: string | null;
+  attachment_file_ids?: UUID[];
+}
+
+export interface TaskListQuery {
+  q?: string;
+  status?: TaskStatus;
+  type?: TaskType;
+  created?: "today" | "3d";
+  integration?: string; // integration key or "none"
+  sort?: "updated" | "created" | "title";
+  page?: number;
+  page_size?: number;
+}
+
+export type EventLevel = "info" | "warn" | "error" | "note";
+export interface TaskEvent {
+  id: UUID;
+  created_at: ISODate;
+  level: EventLevel;
+  kind: string; // e.g. task.created, task.status_changed, task.message
+  message: string;
+}
+
+export interface Artifact {
+  id: UUID;
+  task_id: UUID | null;
+  task_ref: string | null;
+  name: string;
+  kind: string;
+  provenance: "ai_generated" | "verified_result";
+  created_at: ISODate;
+}
+
+// ---------- approvals ----------
+export type ApprovalCategory =
+  | "external_transfer"
+  | "production_change"
+  | "publish"
+  | "send_message"
+  | "record_deletion"
+  | "permission_change";
+
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "changes_requested" | "expired";
+export type RiskLevel = "high" | "medium" | "low";
+export type ExecutionState = "not_executed" | "blocked_until_phase3" | "simulated";
+
+export interface Approval {
+  id: UUID;
+  ref: string; // "A-311"
+  category: ApprovalCategory;
+  title: string;
+  task_id: UUID | null;
+  task_ref: string | null;
+  reason: string;
+  affected_items: string[];
+  data_leaves_workspace: boolean;
+  destination: string;
+  scope_summary: string; // "3 files · 2.4 MB"
+  consequences: string;
+  reversible: string;
+  risk: RiskLevel;
+  status: ApprovalStatus;
+  requested_at: ISODate;
+  expires_at: ISODate | null;
+  decided_at: ISODate | null;
+  decision_note: string | null;
+  execution_state: ExecutionState;
+}
+
+export type ApprovalDecision = "approve" | "reject" | "request_changes";
+export interface DecisionInput {
+  decision: ApprovalDecision;
+  note?: string;
+  acknowledged: boolean; // user ticked "I understand this is …"
+  confirmed_items?: string[]; // required for record_deletion: must equal affected_items
+}
+
+// ---------- files ----------
+export type FileStatus = "uploading" | "unscanned" | "scanning" | "processing" | "ready" | "failed" | "quarantined";
+export type FileClassification = "private" | "approved_integration" | "public" | "unknown";
+
+export interface FileItem {
+  id: UUID;
+  name: string;
+  type_label: string; // "CSV", "PDF"
+  content_type: string;
+  size_bytes: number;
+  status: FileStatus;
+  classification: FileClassification;
+  collection: string;
+  uploaded_at: ISODate;
+  error_message: string | null;
+  scan_status: "not_configured" | "pending" | "clean" | "infected";
+  deletion_requested: boolean;
+}
+
+export interface FileListQuery {
+  q?: string;
+  collection?: string;
+  classification?: FileClassification;
+  status?: FileStatus;
+  page?: number;
+  page_size?: number;
+}
+
+export interface UploadLimits {
+  max_bytes: number;
+  allowed_types: string[]; // human labels
+  collections: string[];
+}
+
+// ---------- automations ----------
+export type AutomationTrigger = "manual" | "schedule" | "event";
+export interface Automation {
+  id: UUID;
+  ref: string;
+  name: string;
+  trigger: AutomationTrigger;
+  schedule_text: string;
+  timezone: string;
+  template: string;
+  tools: string[];
+  file_scope: string;
+  approval_policy: string;
+  last_run_text: string;
+  next_run_text: string;
+  enabled: boolean;
+  created_at: ISODate;
+}
+export interface CreateAutomationInput {
+  name: string;
+  trigger: "manual" | "schedule";
+  frequency?: "daily" | "weekly" | "monthly";
+  day?: string;
+  time?: string;
+  template: string;
+  tools: string[];
+  file_scope: string;
+  approval_policy: string;
+}
+
+// ---------- integrations ----------
+export type IntegrationStatus = "demo" | "not_connected" | "backend_required" | "connected";
+export interface Integration {
+  key: string;
+  name: string;
+  icon: string;
+  status: IntegrationStatus;
+  description: string;
+  last_activity: string;
+  destination: string;
+  scopes: string[];
+  connectable: boolean; // false in Phase 2: real connection flows are Phase 3
+}
+
+// ---------- activity / notifications ----------
+export type ActivityType = "task" | "plan" | "approval" | "execution" | "error" | "integration" | "security" | "auth" | "file" | "settings";
+export interface ActivityEvent {
+  id: UUID;
+  created_at: ISODate;
+  type: ActivityType;
+  action: string; // machine name, e.g. task.created
+  message: string;
+  task_id: UUID | null;
+  task_ref: string | null;
+  actor: string | null;
+}
+
+export interface NotificationItem {
+  id: UUID;
+  type: string; // label, e.g. "Approval requested"
+  icon: string;
+  text: string;
+  created_at: ISODate;
+  unread: boolean;
+  target: { route: string; id?: UUID } | null;
+}
+
+// ---------- dashboard ----------
+export type ComponentStatus = "not_configured" | "not_connected" | "ok" | "degraded";
+export interface Dashboard {
+  agent: { status: ComponentStatus; planner: ComponentStatus; queue: ComponentStatus; message: string };
+  counts: {
+    in_progress: number;
+    awaiting_approval_plans: number;
+    pending_actions: number;
+    completed_week: number;
+    needs_attention: number;
+  };
+  setup: { verify_email: boolean; privacy: boolean; integration: boolean; first_task: boolean };
+  recent_tasks: TaskSummary[];
+  pending_approvals: Approval[];
+  recent_activity: ActivityEvent[];
+  unread_notifications: number;
+}
+
+// ---------- security ----------
+export type PrivacyMode = "strict" | "approval" | "custom";
+export interface SecurityCheck {
+  key: string;
+  label: string;
+  status: "enforced" | "partial" | "not_configured";
+  detail: string;
+}
+export interface BlockedAction {
+  id: UUID;
+  created_at: ISODate;
+  text: string;
+  reason: string;
+}
+export interface SecurityStatus {
+  privacy_mode: PrivacyMode;
+  privacy_enforced: boolean;
+  checklist: SecurityCheck[];
+  blocked_actions: BlockedAction[];
+  recent_decisions: Approval[];
+  retention: { label: string; value: string }[];
+  ai_provider_policy: string;
+}
+
+// ---------- settings ----------
+export interface NotificationPrefs {
+  approval: boolean;
+  done: boolean;
+  failed: boolean;
+  security: boolean;
+  digest: boolean;
+}
+export interface AiRules {
+  share: boolean;
+  publish: boolean;
+  prod: boolean;
+  del: boolean;
+  folders: boolean;
+}
+export interface ToolPermissions {
+  wp_read: boolean;
+  wp_write: boolean;
+  browser: boolean;
+  email: boolean;
+  external: boolean;
+}
+export interface Settings {
+  profile: { name: string; email: string; timezone: string };
+  notifications: NotificationPrefs;
+  workspace: {
+    name: string;
+    privacy_mode: PrivacyMode;
+    ai_rules: AiRules;
+    tool_permissions: ToolPermissions;
+    allowed_domains: string[];
+    can_edit: boolean;
+  };
+  enforced: boolean; // false until the Phase 3 policy engine enforces these
+}
+export interface PreferencesInput {
+  name?: string;
+  timezone?: string;
+  notifications?: Partial<NotificationPrefs>;
+}
+export interface WorkspaceSettingsInput {
+  name?: string;
+  privacy_mode?: PrivacyMode;
+  ai_rules?: Partial<AiRules>;
+  tool_permissions?: Partial<ToolPermissions>;
+  allowed_domains?: string[];
+}
+export interface OnboardingInput {
+  goals: string[];
+  where: string[];
+  ai_rules: AiRules;
+}
+
+export interface Usage {
+  period: string;
+  items: { key: string; label: string; used: number; limit: number | null; unit: string }[];
+  tracked: boolean;
+}
+
+export interface AccountRequest {
+  id: UUID;
+  kind: "data_export" | "account_deletion";
+  status: "received";
+  created_at: ISODate;
+  message: string;
+}
