@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator
 
 from app.domain.enums import (
     ApprovalCategory,
@@ -54,7 +54,18 @@ class Message(Out):
     message: str
 
 
-Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+def _clean_name(v: str) -> str:
+    from app.adapters.storage import strip_invisible
+
+    v = strip_invisible(v).strip()
+    if not v:
+        raise ValueError("Enter a name.")
+    return v
+
+
+Name = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120), AfterValidator(_clean_name)
+]
 ShortCode = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40, pattern=r"^[a-z0-9_]+$")
 ]

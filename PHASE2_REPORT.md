@@ -33,7 +33,7 @@ All commands were run in this environment on 2026-10-24.
 | `cd api && uv run ruff check app migrations tests` | All checks passed |
 | `uv run ruff format --check app migrations tests` | 42 files already formatted |
 | `uv run mypy app` (strict) | Success: no issues found in 32 source files |
-| `uv run pytest` (isolated `steward_test` database, app connects as `steward_app`) | **225 passed** in ~31 s |
+| `uv run pytest` (isolated `steward_test` database, app connects as `steward_app`) | **225 passed** in ~31 s (before the quality gate; 252 after, see below) |
 | `cd web && npm run lint` | 0 problems |
 | `npm run typecheck` | 0 errors |
 | `npm test` (Vitest) | 7 passed |
@@ -93,3 +93,46 @@ The e2e run covers: register → generic error before verification → verify vi
 - Executing approved deletions with soft-delete, retention jobs and permanent removal.
 - PostgreSQL RLS as defence in depth, a hash-chained audit log, MFA, a session management UI, data export, and processing of account-deletion requests.
 - Monitoring, structured logs shipping, automated restore-tested backups, CI pipeline.
+
+## Quality gate — 2026-10-24 (after Phase 2 delivery)
+
+The `ai-agent-quality-gate` workflow: checks re-run, an independent security review recorded findings **before** fixing (`SECURITY_REVIEW.md`), then fixes in severity order, each with a regression test.
+
+**Findings:** 13 in total: 1 High (SR-1 rate-limit bypass / site-wide lockout through a spoofed `X-Forwarded-For`), 4 Medium (open redirect, upload type bypasses, register timing oracle, mail-outage oracle), 7 Low, 1 Informational. All are fixed except two items in SR-13, which are documented accepted risks (login lockout trade-off, self-approval in single-user workspaces) — see `SECURITY_REVIEW.md`. SR-11 is fixed only partly: the CSP still allows inline scripts until nonces are added.
+
+| Check (re-run after all fixes) | Status | Result |
+|---|---|---|
+| `ruff check app migrations tests` / `ruff format --check` | Passed | All checks passed; 44 files formatted |
+| `mypy app` (strict) | Passed | No issues in 32 source files |
+| `pytest` (full suite) | Passed | **252 passed**, three consecutive runs (the previously flaky ordering test is fixed) |
+| New regression tests (`tests/test_security_regressions.py`) | Passed | 27 tests covering SR-1…SR-13 |
+| Migration `0003` on the existing dev database | Passed | Applied cleanly to live data; upgrade→downgrade→upgrade test passes |
+| `npm run lint` / `typecheck` | Passed | 0 problems |
+| `npm test` (Vitest) | Passed | 25 passed (incl. 17 open-redirect cases, CSP header test) |
+| `npm run build` | Passed | 22 routes; demo data not in the bundle |
+| `node e2e/smoke.mjs` (real API + production web, CSP active) | Passed | 25/25 steps, 0 console errors |
+| Live SR-1 check through Next.js with rotating spoofed XFF | Passed | `202 202 429 429 429 429 429` |
+| `npm audit` (prod + dev) | Passed | 0 vulnerabilities |
+| `pip-audit -r requirements.lock` | Passed | No known vulnerabilities |
+| `docker compose config` with/without required secrets | Passed | Valid; refuses to start without `APP_ENV` / `APPROVAL_SIGNING_KEY` |
+| Fresh Docker stack + e2e **after** these fixes | **Not run** | The sandbox Docker daemon was stopped; the earlier full-stack run predates these fixes. The Dockerfile change is limited to uvicorn flags, which were verified on the local server. |
+
+### Load baseline (local sandbox, not a capacity claim)
+
+Environment: 4 vCPU sandbox, **one** uvicorn worker (Docker runs two), PostgreSQL on the same host, a signed-in client calling the API directly, 8 s per step. Workload: repeated authenticated reads; writes are rate limited by design.
+
+| Endpoint | Concurrency | Throughput | p50 | p95 | p99 | Errors |
+|---|---|---|---|---|---|---|
+| `GET /dashboard` | 1 | 67 req/s | 14 ms | 19 ms | 24 ms | 0 |
+| `GET /dashboard` | 10 | 65 req/s | 149 ms | 205 ms | 264 ms | 0 |
+| `GET /dashboard` | 25 | 66 req/s | 369 ms | 531 ms | 635 ms | 0 |
+| `GET /dashboard` | 50 | 59 req/s | 819 ms | 1280 ms | 1497 ms | 0 |
+| `GET /tasks?page_size=20` | 1 | 108 req/s | 9 ms | 13 ms | 15 ms | 0 |
+| `GET /tasks?page_size=20` | 25 | 113 req/s | 217 ms | 286 ms | 332 ms | 0 |
+
+Reading: one worker saturates at about 60–110 req/s depending on the endpoint. Beyond that, latency grows linearly with queueing and no requests fail. `/dashboard` runs ~8 queries and is the obvious first optimisation target (a single aggregate query, or short-lived caching). These are virtual clients in a tight loop, not human users; staging tests on the target VPS (more workers, separate DB, k6/Locust) are needed before any capacity statement. CPU/DB metrics were not collected.
+
+### Still requiring your approval / action
+- Production deployment, DNS, real SMTP credentials and TLS: not done, and not attempted.
+- Set `APPROVAL_SIGNING_KEY`, `TRUST_PROXY_HEADERS=true` (with `--profile tls`) and `APP_ENV=production` on the VPS. The API refuses to start otherwise.
+- Pending approvals created before this change will refuse to be decided (their signature format changed). This is development data only.

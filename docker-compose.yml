@@ -5,10 +5,13 @@
 name: steward
 
 x-api-env: &api-env
-  ENV: ${APP_ENV:-development}
+  ENV: ${APP_ENV:?set APP_ENV to development or production}
+  APPROVAL_SIGNING_KEY: ${APPROVAL_SIGNING_KEY:?set APPROVAL_SIGNING_KEY (openssl rand -base64 48)}
   DATABASE_URL: postgresql+psycopg://steward_app:${STEWARD_APP_PASSWORD:?set STEWARD_APP_PASSWORD}@db:5432/steward
   APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
-  TRUST_PROXY_HEADERS: "true"
+  # true ONLY with the Caddy "tls" profile, which sets X-Real-IP. Without Caddy every
+  # request shares the web container address (per-IP limits then act site-wide).
+  TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
   STORAGE_DIR: /data/storage
   MAIL_BACKEND: ${MAIL_BACKEND:-outbox}
   MAIL_OUTBOX_DIR: /data/mail-outbox

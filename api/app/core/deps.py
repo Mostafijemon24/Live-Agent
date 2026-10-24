@@ -29,18 +29,28 @@ CSRF_HEADER = "x-csrf-token"
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
+def csrf_cookie_name(settings: Settings) -> str:
+    # __Host- stops sibling subdomains from planting ("tossing") a CSRF cookie in production.
+    return "__Host-stw_csrf" if settings.cookie_secure else CSRF_COOKIE
+
+
 def session_cookie_name(settings: Settings) -> str:
     # The __Host- prefix makes browsers refuse the cookie unless it is Secure, host-only and Path=/.
     return "__Host-stw_session" if settings.cookie_secure else "stw_session"
 
 
 def client_ip(request: Request) -> str | None:
+    """The client's IP for rate limiting and audit.
+
+    X-Forwarded-For is never used: the Next.js proxy forwards whatever the client
+    sent. With TRUST_PROXY_HEADERS=true, the API reads only X-Real-IP, which the
+    outermost reverse proxy (Caddy, deploy/Caddyfile) overwrites with the real
+    peer address on every request.
+    """
     settings = get_settings()
     candidate: str | None = None
     if settings.trust_proxy_headers:
-        xff = request.headers.get("x-forwarded-for", "")
-        if xff:
-            candidate = xff.split(",")[0].strip()
+        candidate = request.headers.get("x-real-ip", "").strip() or None
     if not candidate and request.client:
         candidate = request.client.host
     try:
@@ -61,7 +71,7 @@ def verify_csrf(request: Request) -> None:
     origin = request.headers.get("origin")
     if origin and origin.rstrip("/") != settings.app_origin.rstrip("/"):
         raise ApiError(403, "csrf_failed", "This request came from an unexpected site and was blocked.")
-    cookie = request.cookies.get(CSRF_COOKIE, "")
+    cookie = request.cookies.get(csrf_cookie_name(settings), "")
     header = request.headers.get(CSRF_HEADER, "")
     if not cookie or not header or not constant_time_equals(cookie, header):
         raise ApiError(
@@ -98,7 +108,13 @@ class Context:
         )
 
     def deny(self, target_type: str, target_id: object, what: str) -> ApiError:
-        """Record an authorization failure and return the 404 to raise (no existence oracle)."""
+        """Record an authorization failure and return the 404 to raise (no existence oracle).
+
+        Probing is rate limited (429 after the limit) so it can't flood the append-only audit log.
+        """
+        from app.core import ratelimit as RL
+
+        RL.hit(RL.DENIED_USER, str(self.user.id))
         self.log(
             "authz.denied",
             "security",

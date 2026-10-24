@@ -13,4 +13,6 @@ RUN mkdir -p /data/storage /data/mail-outbox && chown -R steward:steward /data
 USER steward
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').status==200 else 1)"
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# --no-proxy-headers: never let uvicorn rewrite the client address from X-Forwarded-For
+# (client-controlled through the web proxy). The app reads X-Real-IP set by Caddy instead.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--no-proxy-headers"]

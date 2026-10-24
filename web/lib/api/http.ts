@@ -2,13 +2,22 @@ import { ApiError, type AgentApi } from "./client";
 import type * as T from "./types";
 
 const BASE = "/api/v1";
-const CSRF_COOKIE = "stw_csrf";
+// Production uses the __Host- prefixed name (secure contexts only); development the plain one.
+const CSRF_COOKIES = ["__Host-stw_csrf", "stw_csrf"];
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function readCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
   const m = document.cookie.split("; ").find((c) => c.startsWith(name + "="));
   return m ? decodeURIComponent(m.slice(name.length + 1)) : null;
+}
+
+function readCsrfCookie(): string | null {
+  for (const name of CSRF_COOKIES) {
+    const v = readCookie(name);
+    if (v) return v;
+  }
+  return null;
 }
 
 function qs(params: object): string {
@@ -27,14 +36,14 @@ export class HttpAgentApi implements AgentApi {
   private csrfPromise: Promise<string> | null = null;
 
   private async csrf(): Promise<string> {
-    const existing = readCookie(CSRF_COOKIE);
+    const existing = readCsrfCookie();
     if (existing) return existing;
     if (!this.csrfPromise) {
       this.csrfPromise = fetch(`${BASE}/auth/csrf`, { credentials: "same-origin" })
         .then(async (r) => {
           if (!r.ok) throw await toError(r);
           const body = (await r.json()) as { csrf_token: string };
-          return readCookie(CSRF_COOKIE) ?? body.csrf_token;
+          return readCsrfCookie() ?? body.csrf_token;
         })
         .finally(() => {
           this.csrfPromise = null;
@@ -63,7 +72,8 @@ export class HttpAgentApi implements AgentApi {
       // A stale CSRF cookie: fetch a fresh token once and retry.
       const err = await toError(res);
       if (err.code === "csrf_failed" && UNSAFE.has(method) && !extraHeaders?.["X-Retry"]) {
-        document.cookie = `${CSRF_COOKIE}=; Max-Age=0; path=/`;
+        document.cookie = "stw_csrf=; Max-Age=0; path=/";
+        document.cookie = "__Host-stw_csrf=; Max-Age=0; path=/; secure";
         return this.req<R>(method, path, body, { ...(extraHeaders ?? {}), "X-Retry": "1" });
       }
       throw err;

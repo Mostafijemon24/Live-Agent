@@ -29,7 +29,7 @@ Exact Python versions: `api/uv.lock` / `api/requirements.lock`. Exact npm versio
 
 ```bash
 cp .env.example .env
-# Replace the three passwords with strong random values, e.g. `openssl rand -base64 32`
+# Replace every replace-me value (3 passwords + APPROVAL_SIGNING_KEY), e.g. `openssl rand -base64 32`
 docker compose up -d --build
 open http://localhost:3000
 ```
@@ -62,7 +62,7 @@ MIGRATION_DATABASE_URL=postgresql+psycopg://steward_owner:devowner@127.0.0.1:543
 APP_ORIGIN=http://localhost:3000
 EOF
 uv run alembic upgrade head
-uv run uvicorn app.main:app --port 8000      # OpenAPI docs: http://localhost:8000/api/v1/docs
+uv run uvicorn app.main:app --port 8000 --no-proxy-headers   # OpenAPI docs: http://localhost:8000/api/v1/docs
 
 # 3. Web (new terminal)
 cd web
@@ -96,7 +96,7 @@ The tests connect as `steward_owner` to create a throwaway `steward_test` databa
 ## Deploying to a Hostinger VPS (outline)
 
 1. Point your domain's DNS at the VPS. This repository never changes DNS.
-2. Install Docker, then clone the repo and create `.env` with `APP_ENV=production`, `APP_ORIGIN=https://<your domain>`, `DOMAIN=<your domain>`, strong passwords, and `MAIL_BACKEND=smtp` with SMTP settings. The API refuses to start in production with the dev mail adapter, plain HTTP or placeholder passwords.
+2. Install Docker, then clone the repo and create `.env` with `APP_ENV=production`, `TRUST_PROXY_HEADERS=true`, `APP_ORIGIN=https://<your domain>`, `DOMAIN=<your domain>`, strong passwords, and `MAIL_BACKEND=smtp` with SMTP settings. The API refuses to start in production with the dev mail adapter, plain HTTP, placeholder secrets, a short signing key or `TRUST_PROXY_HEADERS=false`.
 3. Run `docker compose --profile tls up -d --build`. Caddy obtains TLS certificates and is the only service listening publicly (ports 80 and 443).
 4. Schedule `deploy/db/backup.sh` (database) and back up the `storage` volume (uploaded files). Test restores regularly.
 5. Firewall: allow only 22, 80 and 443.

@@ -46,8 +46,10 @@ os.environ.update(
         "MAIL_OUTBOX_DIR": str(_tmp / "outbox"),
         "MAIL_BACKEND": "outbox",
         "RATE_LIMIT_ENABLED": "true",
-        # Each test client sends its own X-Forwarded-For, like users behind the reverse proxy.
+        # Each test client sends its own X-Real-IP, as Caddy sets it for each real client.
         "TRUST_PROXY_HEADERS": "true",
+        # Keeps the suite fast; the timing regression test sets a real floor.
+        "AUTH_RESPONSE_FLOOR_MS": "0",
     }
 )
 
@@ -129,7 +131,7 @@ class Api:
         from fastapi.testclient import TestClient
 
         self.ip = ip or f"10.{uuid.uuid4().int % 250}.{uuid.uuid4().int % 250}.{uuid.uuid4().int % 250}"
-        self.c = TestClient(app, base_url="http://testserver.local", headers={"X-Forwarded-For": self.ip})
+        self.c = TestClient(app, base_url="http://testserver.local", headers={"X-Real-IP": self.ip})
         r = self.c.get("/api/v1/auth/csrf")
         assert r.status_code == 200
         self.csrf = r.json()["csrf_token"]

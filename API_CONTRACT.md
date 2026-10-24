@@ -21,7 +21,7 @@ The browser calls these through the web app's own origin (`/api/v1/...` is forwa
 | Name | Limit |
 |---|---|
 | Login per IP / per email | 20 / 15 min · 10 / 15 min |
-| Register per IP | 5 / hour |
+| Register per IP / per email | 5 / hour · 3 / hour |
 | Forgot password per IP / per email | 5 / hour · 3 / hour |
 | Resend verification per IP / per email | 5 / hour · 3 / hour |
 | Reset password per IP · Verify email per IP | 10 / hour · 20 / hour |
@@ -29,6 +29,13 @@ The browser calls these through the web app's own origin (`/api/v1/...` is forwa
 | Uploads per user | 30 / 10 min |
 | Other writes per user | 120 / min |
 | Account requests per user | 3 / hour |
+| Denied-ID probes per user (404s that are audited) | 30 / 10 min |
+
+Client IP for these limits: the peer address, or `X-Real-IP` set by Caddy when `TRUST_PROXY_HEADERS=true`. `X-Forwarded-For` is never trusted. Register, forgot-password and resend-verification always take at least `AUTH_RESPONSE_FLOOR_MS`.
+
+### Roles
+
+viewer = read-only (plus own preferences, onboarding, notifications). member = also create/cancel tasks, messages, uploads, deletion requests. owner/admin = also plan approve/reject, file classification/collection, automations, integrations, approval decisions, workspace settings. A missing role → `403 forbidden`.
 
 ### Common error codes
 

@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 
 from app import schemas as S
 from app.adapters.phase2 import scanner
-from app.adapters.storage import ALLOWED, LocalPrivateFileStorage, detect_type, safe_display_name
+from app.adapters.storage import ALLOWED, LocalPrivateFileStorage, detect_type, safe_display_name, validate_stored
 from app.core.config import get_settings
 from app.core.db import utcnow
 from app.core.deps import Context
@@ -68,6 +68,9 @@ def upload(ctx: Context, stream: BinaryIO, filename: str, collection: str) -> S.
                 "This kind of file isn't accepted. Allowed: " + ", ".join(ALLOWED) + ".",
             )
         label, content_type = detected
+        reason = validate_stored(storage().local_path(stored.key), label)
+        if reason is not None:
+            raise ApiError(415, "unsupported_file_type", f"This file was refused: it {reason}.")
         scan_status = scanner.scan(stored.key) if scanner.is_configured() else ScanStatus.not_configured.value
         status = (
             FileStatus.unscanned.value if scan_status == ScanStatus.not_configured.value else FileStatus.ready.value

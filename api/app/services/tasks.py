@@ -403,11 +403,7 @@ def list_events(ctx: Context, task_id: uuid.UUID, page: int, page_size: int) -> 
     total = ctx.db.execute(select(func.count()).select_from(TaskEvent).where(*conds)).scalar_one()
     rows = (
         ctx.db.execute(
-            select(TaskEvent)
-            .where(*conds)
-            .order_by(TaskEvent.created_at, TaskEvent.id)
-            .offset((page - 1) * page_size)
-            .limit(page_size)
+            select(TaskEvent).where(*conds).order_by(TaskEvent.seq).offset((page - 1) * page_size).limit(page_size)
         )
         .scalars()
         .all()

@@ -5,7 +5,24 @@ import type { NextConfig } from "next";
 // stay first-party and the API is never exposed directly.
 const apiInternalUrl = process.env.API_INTERNAL_URL ?? "http://127.0.0.1:8000";
 
+// Content-Security-Policy (production builds only; `next dev` needs eval for hot reload).
+// 'unsafe-inline' for scripts is required by Next.js without per-request nonces; everything
+// else is locked to this origin: no external scripts, plugins, framing or <base> hijacking.
+export const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+].join("; ");
+
 const securityHeaders = [
+  ...(process.env.NODE_ENV === "production" ? [{ key: "Content-Security-Policy", value: CSP }] : []),
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

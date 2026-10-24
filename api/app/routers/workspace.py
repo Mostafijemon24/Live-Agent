@@ -11,7 +11,7 @@ from app import schemas as S
 from app.core import ratelimit as RL
 from app.core.deps import Context, get_context, parse_uuid
 from app.core.errors import ApiError
-from app.domain.enums import FileClassification, FileStatus, TaskStatus, TaskType
+from app.domain.enums import FileClassification, FileStatus, TaskStatus, TaskType, WorkspaceRole
 from app.services import approvals as A
 from app.services import files as F
 from app.services import tasks as T
@@ -20,6 +20,22 @@ from app.services.usage import usage_report
 
 router = APIRouter()
 Ctx = Annotated[Context, Depends(get_context)]
+
+
+# Role matrix (see SECURITY_AND_PRIVACY.md): viewer = read-only; member = day-to-day work;
+# owner/admin = anything that approves, shares, schedules or changes workspace policy.
+def _writer(ctx: Ctx) -> Context:
+    ctx.require_role(WorkspaceRole.owner, WorkspaceRole.admin, WorkspaceRole.member)
+    return ctx
+
+
+def _admin(ctx: Ctx) -> Context:
+    ctx.require_role(WorkspaceRole.owner, WorkspaceRole.admin)
+    return ctx
+
+
+Writer = Annotated[Context, Depends(_writer)]
+Admin = Annotated[Context, Depends(_admin)]
 PageQ = Annotated[int, Query(ge=1, le=10_000)]
 
 
@@ -52,7 +68,7 @@ def list_tasks(
 @router.post("/tasks", response_model=S.TaskOut, status_code=201)
 def create_task(
     body: S.CreateTaskIn,
-    ctx: Ctx,
+    ctx: Writer,
     response: Response,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", max_length=80)] = None,
 ) -> S.TaskOut:
@@ -71,37 +87,37 @@ def get_task(task_id: str, ctx: Ctx) -> S.TaskOut:
 
 
 @router.post("/tasks/{task_id}/cancel", response_model=S.TaskOut)
-def cancel_task(task_id: str, ctx: Ctx, body: S.CancelIn | None = None) -> S.TaskOut:
+def cancel_task(task_id: str, ctx: Writer, body: S.CancelIn | None = None) -> S.TaskOut:
     _write_limit(ctx)
     return T.cancel(ctx, parse_uuid(task_id, "task"), body.reason if body else None)
 
 
 @router.post("/tasks/{task_id}/pause", response_model=S.TaskOut)
-def pause_task(task_id: str, ctx: Ctx) -> S.TaskOut:
+def pause_task(task_id: str, ctx: Writer) -> S.TaskOut:
     _write_limit(ctx)
     return T.pause(ctx, parse_uuid(task_id, "task"))
 
 
 @router.post("/tasks/{task_id}/resume", response_model=S.TaskOut)
-def resume_task(task_id: str, ctx: Ctx) -> S.TaskOut:
+def resume_task(task_id: str, ctx: Writer) -> S.TaskOut:
     _write_limit(ctx)
     return T.resume(ctx, parse_uuid(task_id, "task"))
 
 
 @router.post("/tasks/{task_id}/messages", response_model=S.TaskOut)
-def task_message(task_id: str, body: S.TaskMessageIn, ctx: Ctx) -> S.TaskOut:
+def task_message(task_id: str, body: S.TaskMessageIn, ctx: Writer) -> S.TaskOut:
     _write_limit(ctx)
     return T.message(ctx, parse_uuid(task_id, "task"), body.text, body.kind)
 
 
 @router.post("/tasks/{task_id}/plan/approve", response_model=S.TaskOut)
-def approve_plan(task_id: str, body: S.ApprovePlanIn, ctx: Ctx) -> S.TaskOut:
+def approve_plan(task_id: str, body: S.ApprovePlanIn, ctx: Admin) -> S.TaskOut:
     _write_limit(ctx)
     return T.approve_plan(ctx, parse_uuid(task_id, "task"), body.selected_step_ids)
 
 
 @router.post("/tasks/{task_id}/plan/reject", response_model=S.TaskOut)
-def reject_plan(task_id: str, body: S.RejectPlanIn, ctx: Ctx) -> S.TaskOut:
+def reject_plan(task_id: str, body: S.RejectPlanIn, ctx: Admin) -> S.TaskOut:
     _write_limit(ctx)
     return T.reject_plan(ctx, parse_uuid(task_id, "task"), body.note)
 
@@ -133,7 +149,7 @@ def get_approval(approval_id: str, ctx: Ctx) -> S.ApprovalOut:
 
 
 @router.post("/approvals/{approval_id}/decision", response_model=S.ApprovalOut)
-def decide(approval_id: str, body: S.DecisionIn, ctx: Ctx) -> S.ApprovalOut:
+def decide(approval_id: str, body: S.DecisionIn, ctx: Admin) -> S.ApprovalOut:
     _write_limit(ctx)
     return A.decide(ctx, parse_uuid(approval_id, "approval request"), body)
 
@@ -167,7 +183,7 @@ def list_files(
 
 @router.post("/files", response_model=S.FileOut, status_code=201)
 def upload_file(
-    ctx: Ctx, file: Annotated[UploadFile, File()], collection: Annotated[str, Form(max_length=80)] = "Research"
+    ctx: Writer, file: Annotated[UploadFile, File()], collection: Annotated[str, Form(max_length=80)] = "Research"
 ) -> S.FileOut:
     RL.hit(RL.UPLOAD_USER, str(ctx.user.id))
     if not file.filename:
@@ -188,7 +204,7 @@ def get_file(file_id: str, ctx: Ctx) -> S.FileOut:
 
 
 @router.patch("/files/{file_id}", response_model=S.FileOut)
-def patch_file(file_id: str, body: S.FilePatchIn, ctx: Ctx) -> S.FileOut:
+def patch_file(file_id: str, body: S.FilePatchIn, ctx: Admin) -> S.FileOut:
     _write_limit(ctx)
     return F.patch(ctx, parse_uuid(file_id, "file"), body)
 
@@ -211,7 +227,7 @@ def download_file(file_id: str, ctx: Ctx) -> StreamingResponse:
 
 
 @router.post("/files/{file_id}/deletion-request", response_model=S.ApprovalOut, status_code=201)
-def file_deletion_request(file_id: str, body: S.DeletionRequestIn, ctx: Ctx) -> S.ApprovalOut:
+def file_deletion_request(file_id: str, body: S.DeletionRequestIn, ctx: Writer) -> S.ApprovalOut:
     _write_limit(ctx)
     f = F.get_file(ctx, parse_uuid(file_id, "file"))
     return A.request_file_deletion(ctx, f, body.reason)
@@ -224,19 +240,19 @@ def list_automations(ctx: Ctx) -> list[S.AutomationOut]:
 
 
 @router.post("/automations", response_model=S.AutomationOut, status_code=201)
-def create_automation(body: S.CreateAutomationIn, ctx: Ctx) -> S.AutomationOut:
+def create_automation(body: S.CreateAutomationIn, ctx: Admin) -> S.AutomationOut:
     _write_limit(ctx)
     return W.create_automation(ctx, body)
 
 
 @router.patch("/automations/{automation_id}", response_model=S.AutomationOut)
-def patch_automation(automation_id: str, body: S.AutomationPatchIn, ctx: Ctx) -> S.AutomationOut:
+def patch_automation(automation_id: str, body: S.AutomationPatchIn, ctx: Admin) -> S.AutomationOut:
     _write_limit(ctx)
     return W.set_automation_enabled(ctx, parse_uuid(automation_id, "automation"), body.enabled)
 
 
 @router.post("/automations/{automation_id}/run", response_model=S.TaskOut, status_code=201)
-def run_automation(automation_id: str, ctx: Ctx) -> S.TaskOut:
+def run_automation(automation_id: str, ctx: Admin) -> S.TaskOut:
     RL.hit(RL.TASK_CREATE_USER, str(ctx.user.id))
     return W.run_automation(ctx, parse_uuid(automation_id, "automation"))
 
@@ -248,12 +264,13 @@ def list_integrations(ctx: Ctx) -> list[S.IntegrationOut]:
 
 
 @router.post("/integrations/{key}/connect", response_model=S.IntegrationOut)
-def connect_integration(key: str, ctx: Ctx) -> S.IntegrationOut:
+def connect_integration(key: str, ctx: Admin) -> S.IntegrationOut:
+    _write_limit(ctx)
     return W.connect_integration(ctx, key)
 
 
 @router.post("/integrations/{key}/disconnect", response_model=S.IntegrationOut)
-def disconnect_integration(key: str, ctx: Ctx) -> S.IntegrationOut:
+def disconnect_integration(key: str, ctx: Admin) -> S.IntegrationOut:
     _write_limit(ctx)
     return W.disconnect_integration(ctx, key)
 
@@ -306,7 +323,7 @@ def update_preferences(body: S.PreferencesIn, ctx: Ctx) -> S.SettingsOut:
 
 
 @router.patch("/workspace/settings", response_model=S.SettingsOut)
-def update_workspace_settings(body: S.WorkspaceSettingsIn, ctx: Ctx) -> S.SettingsOut:
+def update_workspace_settings(body: S.WorkspaceSettingsIn, ctx: Admin) -> S.SettingsOut:
     _write_limit(ctx)
     return W.update_workspace_settings(ctx, body)
 

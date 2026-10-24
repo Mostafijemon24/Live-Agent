@@ -30,6 +30,7 @@ class Limit:
 LOGIN_IP = Limit("login_ip", 20, 900)
 LOGIN_EMAIL = Limit("login_email", 10, 900)
 REGISTER_IP = Limit("register_ip", 5, 3600)
+REGISTER_EMAIL = Limit("register_email", 3, 3600)
 FORGOT_IP = Limit("forgot_ip", 5, 3600)
 FORGOT_EMAIL = Limit("forgot_email", 3, 3600)
 RESEND_IP = Limit("resend_ip", 5, 3600)
@@ -40,6 +41,8 @@ TASK_CREATE_USER = Limit("task_create_user", 30, 60)
 UPLOAD_USER = Limit("upload_user", 30, 600)
 WRITE_USER = Limit("write_user", 120, 60)
 ACCOUNT_REQUEST_USER = Limit("account_request_user", 3, 3600)
+# Cross-workspace / unknown-ID probes. Each one writes an audit row, so they are capped.
+DENIED_USER = Limit("denied_user", 30, 600)
 
 
 def _key(limit: Limit, subject: str) -> str:

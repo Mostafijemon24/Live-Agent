@@ -20,6 +20,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     LargeBinary,
@@ -173,6 +174,12 @@ class Task(Base):
         UniqueConstraint("workspace_id", "id", name="uq_tasks_workspace_id_id"),
         UniqueConstraint("workspace_id", "number", name="uq_tasks_workspace_number"),
         UniqueConstraint("workspace_id", "idempotency_key", name="uq_tasks_workspace_idempotency"),
+        ForeignKeyConstraint(
+            ["workspace_id", "automation_id"],
+            ["automations.workspace_id", "automations.id"],
+            name="fk_tasks_workspace_automation",
+            ondelete="RESTRICT",
+        ),
         _check("status", E.TaskStatus),
         _check("type", E.TaskType),
         _check("priority", E.TaskPriority),
@@ -224,6 +231,7 @@ class TaskEvent(Base):
     from_status: Mapped[str | None] = mapped_column(String(32))
     to_status: Mapped[str | None] = mapped_column(String(32))
     actor_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True), nullable=False, unique=True)
     __table_args__ = (
         ForeignKeyConstraint(["workspace_id", "task_id"], ["tasks.workspace_id", "tasks.id"], ondelete="RESTRICT"),
         CheckConstraint("level IN ('info','warn','error','note')", name="level_valid"),
@@ -258,6 +266,12 @@ class Job(Base):
     created_at: Mapped[datetime] = _created()
     __table_args__ = (
         UniqueConstraint("workspace_id", "dedupe_key", name="uq_jobs_workspace_dedupe"),
+        ForeignKeyConstraint(
+            ["workspace_id", "task_id"],
+            ["tasks.workspace_id", "tasks.id"],
+            name="fk_jobs_workspace_task",
+            ondelete="RESTRICT",
+        ),
         Index("ix_jobs_status_created", "status", "created_at"),
     )
 
@@ -342,6 +356,13 @@ class DeletionRequest(Base):
             ["approval_requests.workspace_id", "approval_requests.id"],
             ondelete="RESTRICT",
         ),
+        # Only files can be targeted today; the FK guarantees the target is in the same workspace.
+        ForeignKeyConstraint(
+            ["workspace_id", "target_id"],
+            ["files.workspace_id", "files.id"],
+            name="fk_deletion_requests_workspace_file",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint("target_type IN ('file')", name="target_type_valid"),
         _check("status", E.DeletionRequestStatus),
         Index(
@@ -421,6 +442,7 @@ class Automation(Base):
     updated_at: Mapped[datetime] = _updated()
     __table_args__ = (
         UniqueConstraint("workspace_id", "number", name="uq_automations_workspace_number"),
+        UniqueConstraint("workspace_id", "id", name="uq_automations_workspace_id_id"),
         CheckConstraint("trigger IN ('manual','schedule','event')", name="trigger_valid"),
         CheckConstraint("frequency IS NULL OR frequency IN ('daily','weekly','monthly')", name="frequency_valid"),
         # The scheduler is not installed: a scheduled automation may never be enabled in Phase 2.
@@ -464,7 +486,15 @@ class AuditEvent(Base):
     ip: Mapped[str | None] = mapped_column(INET)
     request_id: Mapped[str | None] = mapped_column(String(64))
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    # Strict insertion order (rows written in one transaction share now()).
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(always=True), nullable=False, unique=True)
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "task_id"],
+            ["tasks.workspace_id", "tasks.id"],
+            name="fk_audit_events_workspace_task",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
             "category IN ('task','plan','approval','execution','error','integration','security','auth','file','settings')",
             name="category_valid",

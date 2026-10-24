@@ -1,5 +1,7 @@
 "use client";
 
+import { sameOriginPath } from "@/lib/safe-path";
+
 import { forwardRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 import { FieldError, Icon, TextInput, cx } from "@/components/ui";
 import { isApiError } from "@/lib/api";
@@ -166,10 +168,9 @@ export function splitError(e: unknown, known: string[]): { fields: Record<string
   return { fields: {}, form: "We couldn't reach the server. Nothing was changed. Please try again." };
 }
 
-/** Only allow same-origin relative redirects ("/tasks"), never "//evil.com" or "/\\evil.com". */
+/** Only allow same-origin app paths after login (see lib/safe-path.ts). */
 export function safeNext(next: string | null | undefined): string | null {
-  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return null;
-  return next;
+  return sameOriginPath(next);
 }
 
 /** Shared toast text for the placeholder Terms / Privacy links. */

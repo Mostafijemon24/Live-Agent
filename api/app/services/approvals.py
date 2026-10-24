@@ -8,6 +8,7 @@ the approval's execution_state is `blocked_until_phase3`.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import uuid
 from datetime import timedelta
@@ -16,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app import schemas as S
+from app.core.config import get_settings
 from app.core.db import utcnow
 from app.core.deps import Context
 from app.core.errors import ApiError
@@ -32,21 +34,35 @@ from app.models import ApprovalDecision, ApprovalRequest, DeletionRequest, FileR
 from app.services.views import approval_ref, approvals_out
 
 
-def payload_hash(
-    category: str, affected: list[str], destination: str, task_id: uuid.UUID | None, extra: dict[str, str]
-) -> str:
+def payload_hash(a: ApprovalRequest, extra: dict[str, str]) -> str:
+    """Keyed signature (HMAC-SHA256) over everything the approver is shown, plus identity fields.
+
+    The key comes from APPROVAL_SIGNING_KEY (application config), which the database role cannot
+    read, so changing any displayed field — or recomputing the value without the key — breaks it.
+    """
     canonical = json.dumps(
         {
-            "category": category,
-            "affected": affected,
-            "destination": destination,
-            "task": str(task_id) if task_id else None,
+            "workspace": str(a.workspace_id),
+            "number": a.number,
+            "category": a.category,
+            "title": a.title,
+            "task": str(a.task_id) if a.task_id else None,
+            "reason": a.reason,
+            "affected": list(a.affected_items),
+            "leaves": bool(a.data_leaves_workspace),
+            "destination": a.destination,
+            "scope": a.scope_summary,
+            "consequences": a.consequences,
+            "reversible": a.reversible,
+            "risk": a.risk,
+            "expires": a.expires_at.isoformat() if a.expires_at else None,
             **extra,
         },
         sort_keys=True,
         separators=(",", ":"),
     )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    key = get_settings().approval_signing_key.get_secret_value().encode()
+    return hmac.new(key, canonical.encode(), hashlib.sha256).hexdigest()
 
 
 def _next_approval_number(ctx: Context) -> int:
@@ -93,10 +109,11 @@ def create_approval(
         consequences=consequences,
         reversible=reversible,
         risk=risk.value,
-        payload_hash=payload_hash(category.value, affected, destination, task_id, extra_hash or {}),
+        payload_hash="",
         requested_by=ctx.user.id,
         expires_at=(utcnow() + expires_in) if expires_in else None,
     )
+    a.payload_hash = payload_hash(a, extra_hash or {})
     ctx.db.add(a)
     ctx.db.flush()
     ctx.db.add(
@@ -215,8 +232,8 @@ def decide(ctx: Context, approval_id: uuid.UUID, body: S.DecisionIn) -> S.Approv
             "This request was already decided. Any change needs a new approval request.",
         )
     # The stored hash must still match the stored action (guards against tampering with the row).
-    expected = payload_hash(a.category, list(a.affected_items), a.destination, a.task_id, _extra_for(ctx, a))
-    if expected != a.payload_hash:
+    expected = payload_hash(a, _extra_for(ctx, a))
+    if not hmac.compare_digest(expected, a.payload_hash):
         raise ApiError(
             409,
             "approval_payload_changed",

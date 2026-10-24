@@ -8,5 +8,10 @@
 	# Never proxy internal health/docs paths of the API to the internet.
 	@internal path /healthz /api/v1/docs* /api/v1/openapi.json
 	respond @internal 404
-	reverse_proxy web:3000
+	reverse_proxy web:3000 {
+		# Overwrite (never append) client-supplied values with the real peer address.
+		# The API trusts only X-Real-IP, and only when TRUST_PROXY_HEADERS=true.
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+	}
 }

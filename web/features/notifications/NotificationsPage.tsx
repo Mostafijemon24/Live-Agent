@@ -1,5 +1,7 @@
 "use client";
 
+import { sameOriginPath } from "@/lib/safe-path";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,9 +18,7 @@ type Filter = "all" | "unread";
  * same-origin path (protocol-relative "//…", absolute URLs) falls back to the overview.
  */
 export function notificationHref(target: NotificationItem["target"]): string {
-  const r = target?.route;
-  if (r && r.startsWith("/") && !r.startsWith("//") && !r.startsWith("/\\")) return r;
-  return "/overview";
+  return sameOriginPath(target?.route) ?? "/overview";
 }
 
 export function NotificationsPage() {

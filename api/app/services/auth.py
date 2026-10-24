@@ -7,6 +7,7 @@ verified email, and every login failure uses one generic message.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import timedelta
 
@@ -22,6 +23,8 @@ from app.domain.enums import AuthTokenPurpose, WorkspaceRole
 from app.models import AuthSession, AuthToken, Notification, User, Workspace, WorkspaceMembership
 from app.ports import AuditRecord, EmailMessage
 from app.services.audit import DbAuditLogger
+
+log = logging.getLogger("steward.auth")
 
 GENERIC_LOGIN_ERROR = (
     "That email and password combination did not match, or the email address hasn't been verified yet."
@@ -42,6 +45,17 @@ DEFAULT_TOOLS = {"wp_read": True, "wp_write": False, "browser": True, "email": F
 DEFAULT_NOTIFICATIONS = {"approval": True, "done": True, "failed": True, "security": True, "digest": False}
 
 
+def deliver_mail(settings: Settings, messages: list[EmailMessage]) -> None:
+    """Runs after the HTTP response. Failures are logged (masked address), never surfaced to the client."""
+    mailer = build_mailer(settings)
+    for m in messages:
+        try:
+            mailer.send(m)
+        except Exception:
+            local, _, domain = m.to.partition("@")
+            log.warning("mail delivery failed to=%s***@%s subject=%r", local[:1], domain, m.subject)
+
+
 class AuthService:
     def __init__(self, db: Session, ip: str | None, request_id: str, settings: Settings | None = None) -> None:
         self.db = db
@@ -49,6 +63,7 @@ class AuthService:
         self.request_id = request_id
         self.settings = settings or get_settings()
         self.audit = DbAuditLogger(db)
+        self.pending_mail: list[EmailMessage] = []
 
     # ------------------------------------------------------------ helpers
     def _log(
@@ -104,7 +119,9 @@ class AuthService:
         return user
 
     def _send(self, to: str, subject: str, text: str) -> None:
-        build_mailer(self.settings).send(EmailMessage(to=to, subject=subject, text=text))
+        # Queued, not sent: the router delivers after the response (see deliver_mail), so
+        # mail latency or failures can never reveal whether an account exists.
+        self.pending_mail.append(EmailMessage(to=to, subject=subject, text=text))
 
     def _link(self, path: str, token: str) -> str:
         return f"{self.settings.app_origin.rstrip('/')}{path}?token={token}"
@@ -114,7 +131,9 @@ class AuthService:
         email = email.lower()
         existing = self.db.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if existing is not None:
-            # Same response as a new registration; tell the real owner instead.
+            # Same response and the same expensive work as a new registration (no timing oracle);
+            # tell the real owner instead.
+            hash_password(password)
             self._send(
                 email,
                 "Someone tried to create a Steward account with your email",
@@ -155,7 +174,7 @@ class AuthService:
         self._send(
             email,
             "Verify your email for Steward",
-            f"Hi {first},\n\nOpen this link to verify your email address (valid for 24 hours):\n{self._link('/verify-email', raw)}\n\n"
+            f"Hello,\n\nOpen this link to verify your email address (valid for 24 hours):\n{self._link('/verify-email', raw)}\n\n"
             "If you didn't create an account, you can ignore this email.",
         )
         self._log("auth.registered", "Account created — waiting for email verification", user, ws.id)
@@ -222,6 +241,13 @@ class AuthService:
         )
         self.db.flush()
         return raw
+
+    def revoke_presented_session(self, raw: str) -> None:
+        self.db.execute(
+            update(AuthSession)
+            .where(AuthSession.token_hash == token_hash(raw), AuthSession.revoked_at.is_(None))
+            .values(revoked_at=utcnow(), revoked_reason="replaced_by_login")
+        )
 
     def logout(self, sess: AuthSession, user: User, ws_id: uuid.UUID) -> None:
         sess.revoked_at = utcnow()

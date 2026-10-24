@@ -8,10 +8,13 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import os
 import re
+import unicodedata
 import uuid
+import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import BinaryIO
@@ -77,6 +80,10 @@ class LocalPrivateFileStorage:
             while chunk := f.read(CHUNK):
                 yield chunk
 
+    def local_path(self, key: str) -> Path:
+        """Filesystem path for server-side inspection only (never exposed)."""
+        return self._path(key)
+
     def exists(self, key: str) -> bool:
         try:
             return self._path(key).is_file()
@@ -121,45 +128,115 @@ def _is_text(head: bytes) -> bool:
         return e.start >= len(head) - 4
 
 
+_EXTENSIONS = {label: tuple(exts.split()) for label, (_ct, exts) in ALLOWED.items()}
+_EXTENSIONS["TXT"] = (".txt", ".log")
+
+# Markers of content a browser or OS could execute/render actively. Checked across the WHOLE file.
+_ACTIVE_MARKERS = (
+    b"<script",
+    b"<html",
+    b"<!doctype html",
+    b"<svg",
+    b"<iframe",
+    b"<object",
+    b"<embed",
+    b"<form",
+    b"<meta",
+    b"<link",
+    b"<base",
+    b"javascript:",
+    b"vbscript:",
+    b"onerror=",
+    b"onload=",
+)
+_DANGEROUS_ZIP_ENTRY = re.compile(
+    r"(\.(exe|dll|bat|cmd|com|scr|msi|ps1|vbs|vbe|js|jse|wsf|wsh|hta|jar|sh|lnk|app)$)|vbaproject|activex|embeddings/.*\.bin$",
+    re.I,
+)
+MAX_ZIP_ENTRIES = 2000
+MAX_ZIP_UNCOMPRESSED = 200 * 1024 * 1024
+
+
+def _ext_ok(label: str, ext: str) -> bool:
+    return ext in _EXTENSIONS.get(label, ())
+
+
 def detect_type(head: bytes, filename: str) -> tuple[str, str] | None:
-    """Return (label, content_type) or None when the content is not on the allowlist."""
+    """Return (label, content_type) or None. The extension must match the detected content,
+    so a file is always served back with an extension that matches what it really is."""
     ext = os.path.splitext(filename.lower())[1]
     if head.startswith(b"%PDF-"):
-        return "PDF", ALLOWED["PDF"][0]
-    if head.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "PNG", ALLOWED["PNG"][0]
-    if head.startswith(b"\xff\xd8\xff"):
-        return "JPG", ALLOWED["JPG"][0]
-    if head.startswith(b"PK\x03\x04"):
-        # Office Open XML documents are zip containers; accept only when the extension says which one.
+        label = "PDF"
+    elif head.startswith(b"\x89PNG\r\n\x1a\n"):
+        label = "PNG"
+    elif head.startswith(b"\xff\xd8\xff"):
+        label = "JPG"
+    elif head.startswith(b"PK\x03\x04"):
+        # Office Open XML containers only; the full structure is checked by validate_stored().
         # Arbitrary archives (.zip) are not accepted in Phase 2 because nothing can inspect them yet.
-        if ext == ".docx" and b"word/" in head:
-            return "DOCX", ALLOWED["DOCX"][0]
-        if ext == ".xlsx" and b"xl/" in head:
-            return "XLSX", ALLOWED["XLSX"][0]
-        if ext in (".docx", ".xlsx") and b"[Content_Types].xml" in head:
-            label = "DOCX" if ext == ".docx" else "XLSX"
-            return label, ALLOWED[label][0]
-        return None
-    if head[:2] == b"MZ" or head[:4] == b"\x7fELF" or head[:2] == b"#!":
+        label = {".docx": "DOCX", ".xlsx": "XLSX"}.get(ext, "")
+    elif head[:2] == b"MZ" or head[:4] == b"\x7fELF" or head[:2] == b"#!":
         return None  # executables and scripts are never accepted
-    if _is_text(head):
-        lowered = head[:512].lower()
-        if b"<script" in lowered or b"<html" in lowered or b"<!doctype html" in lowered or b"<svg" in lowered:
-            return None  # active content
-        if ext == ".csv":
-            return "CSV", ALLOWED["CSV"][0]
-        if ext == ".md":
-            return "MD", ALLOWED["MD"][0]
-        if ext == ".json":
-            return "JSON", ALLOWED["JSON"][0]
-        if ext in (".txt", ".log", ""):
-            return "TXT", ALLOWED["TXT"][0]
+    elif _is_text(head):
+        label = {".csv": "CSV", ".md": "MD", ".json": "JSON", ".txt": "TXT", ".log": "TXT"}.get(ext, "")
+    else:
+        return None
+    if not label or not _ext_ok(label, ext):
+        return None
+    return label, ALLOWED[label][0]
+
+
+def validate_stored(path: Path, label: str) -> str | None:
+    """Full-content checks after the upload landed in private storage. Returns a rejection reason or None."""
+    if label in ("DOCX", "XLSX"):
+        required = "word/document.xml" if label == "DOCX" else "xl/workbook.xml"
+        try:
+            with zipfile.ZipFile(path) as zf:
+                infos = zf.infolist()
+                if len(infos) > MAX_ZIP_ENTRIES:
+                    return "too many entries"
+                if sum(i.file_size for i in infos) > MAX_ZIP_UNCOMPRESSED:
+                    return "expands too much"
+                names = {i.filename for i in infos}
+                if "[Content_Types].xml" not in names or required not in names:
+                    return "not a valid Office document"
+                for n in names:
+                    if n.startswith("/") or ".." in n.split("/") or _DANGEROUS_ZIP_ENTRY.search(n):
+                        return "contains executable content or macros"
+        except (zipfile.BadZipFile, OSError):
+            return "not a valid Office document"
+        return None
+    if label in ("CSV", "TXT", "MD", "JSON"):
+        overlap = max(len(m) for m in _ACTIVE_MARKERS)
+        tail = b""
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        with path.open("rb") as f:
+            while chunk := f.read(CHUNK):
+                if b"\x00" in chunk:
+                    return "not a text file"
+                try:
+                    decoder.decode(chunk)
+                except UnicodeDecodeError:
+                    return "not valid UTF-8 text"
+                window = (tail + chunk).lower()
+                if any(m in window for m in _ACTIVE_MARKERS):
+                    return "contains active web content"
+                tail = window[-overlap:]
+        try:
+            decoder.decode(b"", final=True)
+        except UnicodeDecodeError:
+            return "not valid UTF-8 text"
     return None
+
+
+def strip_invisible(text: str) -> str:
+    """Remove control, format (bidi overrides, zero-width) and line/paragraph-separator characters,
+    which can disguise a name (e.g. 'invoice\u202efdp.hta' renders as 'invoiceath.pdf')."""
+    return "".join(ch for ch in text if unicodedata.category(ch) not in ("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn"))
 
 
 def safe_display_name(name: str) -> str:
     """A display-only version of the client filename (never used as a path)."""
     base = name.replace("\\", "/").split("/")[-1]
-    base = re.sub(r"[\x00-\x1f\x7f]", "", base).strip().strip(".")
+    base = strip_invisible(base).strip().strip(".")
     return (base or "unnamed")[:200]

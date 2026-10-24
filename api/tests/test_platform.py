@@ -70,7 +70,7 @@ def test_migrations_upgrade_downgrade_upgrade() -> None:
     run_migrations(url)
     eng = create_engine(url)
     with eng.connect() as c:
-        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0002"
+        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0003"
         tables = set(c.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public'")).scalars())
     eng.dispose()
     assert {"users", "workspaces", "tasks", "audit_events", "deletion_requests", "jobs", "usage_counters"} <= tables
@@ -313,25 +313,30 @@ def test_production_config_guards(monkeypatch: Any) -> None:
 
     from app.core.config import Settings
 
-    with pytest.raises(ValidationError, match="outbox"):
-        Settings(
-            env="production",
-            app_origin="https://app.example.com",
-            mail_backend="outbox",
-            database_url="postgresql+psycopg://a:strong@db/x",
-        )  # type: ignore[arg-type]
-    with pytest.raises(ValidationError, match="https"):
-        Settings(
-            env="production",
-            app_origin="http://app.example.com",
-            mail_backend="smtp",
-            database_url="postgresql+psycopg://a:strong@db/x",
-        )  # type: ignore[arg-type]
-    s = Settings(
-        env="production",
-        app_origin="https://app.example.com",
-        mail_backend="smtp",
-        cookie_secure=False,
-        database_url="postgresql+psycopg://a:strong@db/x",
-    )  # type: ignore[arg-type]
+    good: dict[str, Any] = {
+        "env": "production",
+        "app_origin": "https://app.example.com",
+        "mail_backend": "smtp",
+        "smtp_host": "smtp.example.com",
+        "trust_proxy_headers": True,
+        "cookie_secure": False,
+        "database_url": "postgresql+psycopg://a:Str0ng-Random-Value@db/x",
+        "approval_signing_key": "k" * 40,
+    }
+    s = Settings(**good)
     assert s.cookie_secure is True
+    bad_cases = [
+        ({"mail_backend": "outbox"}, "MAIL_BACKEND"),
+        ({"mail_backend": "disabled"}, "MAIL_BACKEND"),
+        ({"smtp_starttls": False}, "STARTTLS"),
+        ({"app_origin": "http://app.example.com"}, "https"),
+        ({"database_url": "postgresql+psycopg://a:replace-me@db/x"}, "DATABASE_URL"),
+        ({"database_url": "postgresql+psycopg://steward_app:devapp@db/x"}, "DATABASE_URL"),
+        ({"approval_signing_key": "dev-only-approval-signing-key-change-me"}, "APPROVAL_SIGNING_KEY"),
+        ({"approval_signing_key": "short"}, "APPROVAL_SIGNING_KEY"),
+        ({"trust_proxy_headers": False}, "TRUST_PROXY_HEADERS"),
+        ({"rate_limit_enabled": False}, "rate limiting"),
+    ]
+    for override, needle in bad_cases:
+        with pytest.raises(ValidationError, match=needle):
+            Settings(**{**good, **override})

@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     cookie_secure: bool = False  # forced True in production
     session_idle_hours: int = 12
     session_absolute_days: int = 7
-    trust_proxy_headers: bool = False  # honour X-Forwarded-For only behind our own reverse proxy
+    # True only behind deploy/Caddyfile, which overwrites X-Real-IP with the real client address.
+    trust_proxy_headers: bool = False
 
     # Files
     storage_dir: Path = Path("./var/storage")
@@ -43,6 +44,13 @@ class Settings(BaseSettings):
     smtp_password: SecretStr | None = None
     smtp_starttls: bool = True
 
+    # Register / forgot-password / resend-verification always take at least this long, so response
+    # time does not reveal whether an account exists. Must exceed the slowest path (Argon2 + DB).
+    auth_response_floor_ms: int = 400
+
+    # Signs approval requests (HMAC). Keep it out of the database; rotate by re-requesting pending approvals.
+    approval_signing_key: SecretStr = SecretStr("dev-only-approval-signing-key-change-me")
+
     # Rate limits can be disabled only in tests that are not about rate limiting.
     rate_limit_enabled: bool = True
 
@@ -50,16 +58,30 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _production_guards(self) -> Settings:
-        if self.env == "production":
-            self.cookie_secure = True
-            if self.mail_backend == "outbox":
-                raise ValueError("MAIL_BACKEND=outbox is a development adapter and is not allowed in production")
-            if not self.app_origin.startswith("https://"):
-                raise ValueError("APP_ORIGIN must be https:// in production")
-            if "change-me" in self.database_url.get_secret_value():
-                raise ValueError("DATABASE_URL still contains the placeholder password")
-            if not self.rate_limit_enabled:
-                raise ValueError("Rate limiting cannot be disabled in production")
+        if self.env != "production":
+            return self
+        self.cookie_secure = True
+        problems = []
+        placeholders = ("change-me", "replace-me", ":devapp@", ":devowner@")
+        if any(p in self.database_url.get_secret_value() for p in placeholders):
+            problems.append("DATABASE_URL still contains a placeholder or development password")
+        key = self.approval_signing_key.get_secret_value()
+        if len(key) < 32 or any(p in key for p in placeholders):
+            problems.append("APPROVAL_SIGNING_KEY must be a random secret of at least 32 characters")
+        if self.mail_backend != "smtp":
+            problems.append("MAIL_BACKEND must be smtp (users cannot verify or recover accounts otherwise)")
+        elif not self.smtp_host or not self.smtp_starttls:
+            problems.append("SMTP_HOST is required and SMTP_STARTTLS must stay enabled")
+        if not self.app_origin.startswith("https://"):
+            problems.append("APP_ORIGIN must be https://")
+        if not self.rate_limit_enabled:
+            problems.append("rate limiting cannot be disabled")
+        if not self.trust_proxy_headers:
+            problems.append(
+                "TRUST_PROXY_HEADERS must be true behind the Caddy proxy (otherwise every user shares one rate-limit bucket)"
+            )
+        if problems:
+            raise ValueError("Unsafe production configuration: " + "; ".join(problems))
         return self
 
     @property

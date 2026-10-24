@@ -186,7 +186,7 @@ def dashboard(ctx: Context) -> S.DashboardOut:
     )
     acts = list(
         db.execute(
-            select(AuditEvent).where(AuditEvent.workspace_id == ws).order_by(AuditEvent.created_at.desc()).limit(6)
+            select(AuditEvent).where(AuditEvent.workspace_id == ws).order_by(AuditEvent.seq.desc()).limit(6)
         ).scalars()
     )
     unread = db.execute(
@@ -239,7 +239,7 @@ def list_activity(ctx: Context, type_: str | None, page: int, page_size: int) ->
         ctx.db.execute(
             select(AuditEvent)
             .where(*conds)
-            .order_by(AuditEvent.created_at.desc(), AuditEvent.id)
+            .order_by(AuditEvent.seq.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         ).scalars()
@@ -510,7 +510,7 @@ def security_status(ctx: Context) -> S.SecurityStatusOut:
                 AuditEvent.workspace_id == ws.id,
                 AuditEvent.action.in_(("policy.blocked", "authz.denied", "authz.role_denied")),
             )
-            .order_by(AuditEvent.created_at.desc())
+            .order_by(AuditEvent.seq.desc())
             .limit(10)
         )
         .scalars()
