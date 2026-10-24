@@ -3,12 +3,15 @@
 import type {
   ApprovalCategory,
   ApprovalStatus,
+  ExecutionState,
   ExecutionMode,
   FileClassification,
   FileStatus,
   IntegrationStatus,
   RiskLevel,
   StepRisk,
+  StepImpact,
+  StepPolicy,
   StepState,
   TaskStatus,
   TaskType,
@@ -76,6 +79,39 @@ export const STEP_STATE: Record<StepState, BadgeMeta> = {
   failed: { label: "Failed", ...RED, icon: "circle-x" },
   paused: { label: "Paused", ...N, icon: "circle-pause" },
   cancelled: { label: "Cancelled", ...N, icon: "ban" },
+  awaiting_approval: { label: "Waiting for your approval", ...AMB, icon: "hourglass" },
+  blocked: { label: "Blocked by policy", ...RED, icon: "shield-ban" },
+  rejected: { label: "Approval declined", ...N, icon: "circle-x" },
+};
+
+/** Policy engine outcome for a plan step (decided on the server, never by the AI model). */
+export const POLICY_OUTCOME: Record<StepPolicy["outcome"], BadgeMeta> = {
+  allow: { label: "Allowed", ...GRN, icon: "shield-check" },
+  require_approval: { label: "Needs approval", ...AMB, icon: "hand" },
+  deny: { label: "Blocked by policy", ...RED, icon: "shield-ban" },
+};
+
+export const IMPACT: Record<StepImpact, string> = {
+  none: "Stays in this workspace",
+  workspace_write: "Saves a result in this workspace",
+  external_read: "Reads an outside website",
+  external_transfer: "Sends data outside your servers",
+  publish: "Publishes content",
+  send_message: "Sends a message",
+  production_change: "Changes a live system",
+  sensitive_change: "Runs code in the sandbox",
+  delete: "Requests a deletion (needs its own approval)",
+  permission_change: "Changes permissions",
+};
+
+export const EXECUTION_STATE: Record<ExecutionState, BadgeMeta> = {
+  not_executed: { label: "Nothing to run", ...N, icon: "circle" },
+  blocked_until_phase3: { label: "Not run (older request)", ...N, icon: "ban" },
+  simulated: { label: "Simulated (demo)", ...IND, icon: "flask-conical" },
+  pending_execution: { label: "Approved — waiting to run", ...BLUE, icon: "clock" },
+  executed: { label: "Used", ...GRN, icon: "circle-check" },
+  execution_failed: { label: "Ran, but failed", ...RED, icon: "circle-x" },
+  invalidated: { label: "No longer valid — action changed", ...AMB, icon: "triangle-alert" },
 };
 
 export const FILE_STATUS: Record<FileStatus, BadgeMeta> = {
@@ -91,8 +127,9 @@ export const FILE_STATUS: Record<FileStatus, BadgeMeta> = {
 export const INTEGRATION_STATUS: Record<IntegrationStatus, BadgeMeta> = {
   demo: { label: "Demo", ...IND, icon: "flask-conical" },
   not_connected: { label: "Not connected", ...N, icon: "unplug" },
-  backend_required: { label: "Backend required", ...AMB, icon: "server" },
+  backend_required: { label: "Server setup required", ...AMB, icon: "server" },
   connected: { label: "Connected", ...GRN, icon: "circle-check" },
+  error: { label: "Connection problem", ...RED, icon: "triangle-alert" },
 };
 
 export const TASK_TYPES: { value: TaskType; label: string; icon: string }[] = [
@@ -113,8 +150,8 @@ export const MODES: { value: ExecutionMode; label: string; description: string; 
   {
     value: "execute",
     label: "Execute approved steps",
-    description: "Runs the steps you approve. Disabled until the execution engine and policy engine are installed (Phase 3).",
-    disabled: true,
+    description: "Runs the steps you approve, one by one. Each step is checked by the policy engine first; sensitive steps still ask for a one-time approval.",
+    disabled: false,
   },
 ];
 export const MODE_LABEL = Object.fromEntries(MODES.map((m) => [m.value, m.label])) as Record<ExecutionMode, string>;
@@ -185,13 +222,20 @@ export const APPROVAL_CATEGORY: Record<ApprovalCategory, { label: string; tone: 
     head: "A connected tool will get new permissions",
     body: "The tool will be able to do more than before. You can revoke this later.",
   },
+  code_execution: {
+    label: "Run code",
+    tone: "warning",
+    icon: "terminal",
+    head: "A short program will run in the sandbox",
+    body: "It runs in an isolated sandbox with no network access and strict time and memory limits. This approval covers only the exact program shown.",
+  },
 };
 
 export const CLASSIFICATION: Record<FileClassification, { label: string; short: string; fg: string; bg: string; icon: string }> = {
-  private: { label: "Private — workspace only", short: "Private", ...IND, icon: "lock" },
-  approved_integration: { label: "Approved for selected integration", short: "Approved for selected integration", ...GRN, icon: "circle-check" },
-  public: { label: "Public", short: "Public", ...BLUE, icon: "globe" },
-  unknown: { label: "Unknown — sharing blocked", short: "Unknown", ...AMB, icon: "circle-help" },
+  public: { label: "Public — fine to share", short: "Public", ...BLUE, icon: "globe" },
+  internal: { label: "Internal — may go to approved destinations", short: "Internal", ...GRN, icon: "building-2" },
+  confidential: { label: "Confidential — never leaves without approval", short: "Confidential", ...IND, icon: "lock" },
+  unknown: { label: "Unclassified — sharing blocked", short: "Unclassified", ...AMB, icon: "circle-help" },
 };
 
 export const FILE_TYPE_ICON: Record<string, string> = {
@@ -237,10 +281,10 @@ export const PRIVACY_MODES: { value: PrivacyMode; label: string; description: st
   {
     value: "strict",
     label: "Strict private mode",
-    description: "Confidential data cannot leave the approved environment. Outside AI calls are blocked unless you approve a narrow exception.",
+    description: "Nothing leaves without a one-time approval — including reading outside websites and sending task text to an external AI model.",
   },
-  { value: "approval", label: "Approval required", description: "Every transfer outside the workspace needs your approval each time." },
-  { value: "custom", label: "Custom policy", description: "Administrators choose allowed destinations and data classes. Advanced." },
+  { value: "approval", label: "Approval required", description: "Reading allowed websites is fine; any workspace data leaving needs your approval each time." },
+  { value: "custom", label: "Custom policy", description: "Public and internal data may go to the configured model without asking (unless your AI rules say ask). Confidential data still needs approval. Advanced." },
 ];
 
 export const TIMEZONES = ["Asia/Dhaka", "UTC", "Europe/London", "America/New_York"];

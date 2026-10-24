@@ -93,7 +93,31 @@ export type StepState =
   | "paused"
   | "waiting_for_input"
   | "skipped"
-  | "cancelled";
+  | "cancelled"
+  | "awaiting_approval" // waiting for its own one-time approval
+  | "blocked" // denied by the policy engine; never runs
+  | "rejected"; // its approval was declined
+
+export type StepImpact =
+  | "none"
+  | "workspace_write"
+  | "external_read"
+  | "external_transfer"
+  | "publish"
+  | "send_message"
+  | "production_change"
+  | "sensitive_change"
+  | "delete"
+  | "permission_change";
+
+/** Policy engine decision for a step (server-derived, never from the model). */
+export interface StepPolicy {
+  outcome: "allow" | "require_approval" | "deny";
+  reasons: string[];
+  data_leaves: boolean;
+  classification: string;
+  version: string;
+}
 
 export interface TaskStep {
   id: UUID;
@@ -107,12 +131,40 @@ export interface TaskStep {
   selected: boolean;
   started_at: ISODate | null;
   finished_at: ISODate | null;
+  // Phase 3 (optional so demo data without them still type-checks)
+  step_key?: string; // "s1"
+  tool_id?: string | null;
+  args?: Record<string, unknown>; // exact validated arguments (what an approval binds)
+  args_hash?: string | null;
+  impact?: StepImpact;
+  classifications?: string[];
+  destinations?: string[];
+  policy?: StepPolicy | null;
+  output_summary?: string | null;
+  output?: Record<string, unknown> | null; // tool result (data, not instructions)
+  error?: string | null;
+  approval_id?: UUID | null;
+  attempts?: number;
+  artifact_id?: UUID | null;
 }
 
 export interface TaskPlan {
   steps: TaskStep[];
   data_sources: string[];
   destination: string | null;
+  version?: number;
+  summary?: string | null;
+  provider?: string | null; // model that produced the plan
+  provider_location?: "local" | "external" | null;
+}
+
+export interface TaskArtifact {
+  id: UUID;
+  name: string;
+  kind: string;
+  provenance: "ai_generated" | "verified_result";
+  size_bytes: number;
+  created_at: ISODate;
 }
 
 export interface TaskReport {
@@ -145,9 +197,13 @@ export interface Task extends TaskSummary {
   question: string | null;
   error_message: string | null;
   attachments: TaskAttachment[];
-  plan: TaskPlan | null; // null until a planner exists (Phase 3) or in demo mode
+  plan: TaskPlan | null; // null until the planner has produced a plan
   report: TaskReport | null;
   allowed_actions: TaskAction[]; // computed server-side from the state machine
+  data_classification?: FileClassification;
+  started_at?: ISODate | null;
+  finished_at?: ISODate | null;
+  artifacts?: TaskArtifact[];
 }
 
 export type TaskAction = "cancel" | "pause" | "resume" | "answer" | "approve_plan" | "reject_plan" | "revise_plan";
@@ -199,11 +255,19 @@ export type ApprovalCategory =
   | "publish"
   | "send_message"
   | "record_deletion"
-  | "permission_change";
+  | "permission_change"
+  | "code_execution";
 
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "changes_requested" | "expired";
 export type RiskLevel = "high" | "medium" | "low";
-export type ExecutionState = "not_executed" | "blocked_until_phase3" | "simulated";
+export type ExecutionState =
+  | "not_executed"
+  | "blocked_until_phase3" // legacy Phase 2 rows
+  | "simulated" // demo mode only
+  | "pending_execution" // approved; the worker has not run it yet
+  | "executed"
+  | "execution_failed"
+  | "invalidated"; // the action or policy changed after approval
 
 export interface Approval {
   id: UUID;
@@ -226,6 +290,11 @@ export interface Approval {
   decided_at: ISODate | null;
   decision_note: string | null;
   execution_state: ExecutionState;
+  // Phase 3 binding shown to the approver
+  operation?: string | null; // tool id or workflow, e.g. "seo.audit", "deletion.execute"
+  targets?: string[];
+  policy_version?: string | null;
+  step_id?: UUID | null;
 }
 
 export type ApprovalDecision = "approve" | "reject" | "request_changes";
@@ -238,7 +307,7 @@ export interface DecisionInput {
 
 // ---------- files ----------
 export type FileStatus = "uploading" | "unscanned" | "scanning" | "processing" | "ready" | "failed" | "quarantined";
-export type FileClassification = "private" | "approved_integration" | "public" | "unknown";
+export type FileClassification = "public" | "internal" | "confidential" | "unknown";
 
 export interface FileItem {
   id: UUID;
@@ -253,6 +322,8 @@ export interface FileItem {
   error_message: string | null;
   scan_status: "not_configured" | "pending" | "clean" | "infected";
   deletion_requested: boolean;
+  deleted_at?: ISODate | null;
+  restorable_until?: ISODate | null; // deleted files can be restored until then
 }
 
 export interface FileListQuery {
@@ -260,6 +331,7 @@ export interface FileListQuery {
   collection?: string;
   classification?: FileClassification;
   status?: FileStatus;
+  deleted?: boolean; // "Recently deleted"
   page?: number;
   page_size?: number;
 }
@@ -301,7 +373,7 @@ export interface CreateAutomationInput {
 }
 
 // ---------- integrations ----------
-export type IntegrationStatus = "demo" | "not_connected" | "backend_required" | "connected";
+export type IntegrationStatus = "demo" | "not_connected" | "backend_required" | "connected" | "error";
 export interface Integration {
   key: string;
   name: string;
@@ -311,7 +383,11 @@ export interface Integration {
   last_activity: string;
   destination: string;
   scopes: string[];
-  connectable: boolean; // false in Phase 2: real connection flows are Phase 3
+  connectable: boolean; // only integrations with a real adapter
+  operational?: boolean; // a real, tested adapter exists (not a mock)
+  mode?: string | null;
+  site_url?: string | null;
+  error_message?: string | null;
 }
 
 // ---------- activity / notifications ----------
@@ -339,8 +415,44 @@ export interface NotificationItem {
 
 // ---------- dashboard ----------
 export type ComponentStatus = "not_configured" | "not_connected" | "ok" | "degraded";
+export interface ModelProviderInfo {
+  key: string;
+  label: string;
+  model: string;
+  location: "local" | "external";
+  configured: boolean;
+  data_disclosure: string; // plain-language statement of what the provider receives
+}
+
+export interface WorkerInfo {
+  kind: string;
+  alive: boolean;
+  last_heartbeat: ISODate | null;
+}
+
+export interface AgentStatus {
+  status: ComponentStatus;
+  planner: ComponentStatus;
+  queue: ComponentStatus;
+  message: string;
+  provider?: ModelProviderInfo | null;
+  workers?: WorkerInfo[];
+  queue_depth?: Record<string, number>;
+  policy_version?: string | null;
+}
+
+export interface AgentTool {
+  id: string;
+  label: string;
+  description: string;
+  impact: string;
+  risk: StepRisk;
+  available: boolean;
+  unavailable_reason: string | null;
+}
+
 export interface Dashboard {
-  agent: { status: ComponentStatus; planner: ComponentStatus; queue: ComponentStatus; message: string };
+  agent: AgentStatus;
   counts: {
     in_progress: number;
     awaiting_approval_plans: number;

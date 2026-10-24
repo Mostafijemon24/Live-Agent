@@ -1,0 +1,1 @@
+{"scenario": "queue_saturation", "submitted": 300, "codes": {"201": 300}, "admission_seconds": 17.4, "planned": 300, "not_planned_within_600s": 0, "plan_wait_p50_s": 28.6, "plan_wait_p95_s": 37.1}

@@ -20,10 +20,11 @@ SECURITY_HEADERS = [
 
 
 class RequestContextMiddleware:
-    def __init__(self, app: ASGIApp, max_body_bytes: int, hsts: bool) -> None:
+    def __init__(self, app: ASGIApp, max_body_bytes: int, hsts: bool, session_cookie: str = "") -> None:
         self.app = app
         self.max_body = max_body_bytes
         self.hsts = hsts
+        self.session_cookie = session_cookie
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -37,6 +38,17 @@ class RequestContextMiddleware:
         declared = headers.get("content-length")
         if declared and declared.isdigit() and int(declared) > self.max_body:
             await _reject_too_large(send, rid)
+            return
+
+        # Multipart bodies are parsed (and spooled to disk) before route dependencies run, so refuse
+        # uploads without a session cookie before reading any of the body. The real session check
+        # still happens in the route; this only stops anonymous clients from making the API spool data.
+        if (
+            self.session_cookie
+            and headers.get("content-type", "").lower().startswith("multipart/")
+            and f"{self.session_cookie}=" not in headers.get("cookie", "")
+        ):
+            await _reject(send, rid, 401, b"not_authenticated", b"Please sign in to continue.")
             return
 
         received = 0
@@ -74,15 +86,23 @@ class _BodyTooLarge(Exception):
 
 
 async def _reject_too_large(send: Send, rid: str) -> None:
+    await _reject(send, rid, 413, b"payload_too_large", b"The request is too large.")
+
+
+async def _reject(send: Send, rid: str, status: int, code: bytes, message: bytes) -> None:
     body = (
-        b'{"error":{"code":"payload_too_large","message":"The request is too large.","request_id":"'
+        b'{"error":{"code":"'
+        + code
+        + b'","message":"'
+        + message
+        + b'","request_id":"'
         + rid.encode()
         + b'","details":null}}'
     )
     await send(
         {
             "type": "http.response.start",
-            "status": 413,
+            "status": status,
             "headers": [(b"content-type", b"application/json"), (b"x-request-id", rid.encode()), *SECURITY_HEADERS],
         }
     )

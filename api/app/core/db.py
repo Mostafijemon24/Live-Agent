@@ -39,8 +39,11 @@ def get_engine() -> Engine:
         _engine = create_engine(
             settings.database_url.get_secret_value(),
             pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=10,
+            # Per API process. Budget: processes x (pool + overflow) + workers <= Postgres max_connections.
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            # Fail fast under overload (→ 503 service_busy) instead of queueing requests for 30 s.
+            pool_timeout=settings.db_pool_timeout_seconds,
             connect_args={"options": "-c statement_timeout=15000 -c timezone=UTC"},
         )
         _factory = sessionmaker(bind=_engine, expire_on_commit=False, autoflush=False)

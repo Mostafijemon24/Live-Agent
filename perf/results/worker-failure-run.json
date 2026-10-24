@@ -1,0 +1,2 @@
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+{"scenario": "queue_saturation", "submitted": 60, "codes": {"201": 60}, "admission_seconds": 3.6, "planned": 60, "not_planned_within_600s": 0, "plan_wait_p50_s": 16.1, "plan_wait_p95_s": 20.0}

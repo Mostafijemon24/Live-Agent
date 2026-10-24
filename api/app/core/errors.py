@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 log = logging.getLogger("steward.errors")
@@ -84,6 +85,16 @@ def install_error_handlers(app: FastAPI) -> None:
         if exc.status_code == 404:
             msg = "Not found."
         return JSONResponse(_body(request, code, msg), status_code=exc.status_code)
+
+    @app.exception_handler(SATimeoutError)
+    async def _busy(request: Request, exc: SATimeoutError) -> JSONResponse:
+        # Database pool exhausted: shed load quickly and tell clients when to retry.
+        log.warning("database pool exhausted request_id=%s", _rid(request))
+        return JSONResponse(
+            _body(request, "service_busy", "The service is busy right now. Please try again in a moment."),
+            status_code=503,
+            headers={"Retry-After": "2"},
+        )
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:

@@ -117,8 +117,8 @@ export function StatesPage() {
             It will work once the server, database and workers are connected. Until then it shows sample data only.
           </StateCard>
         ) : (
-          <StateCard label="ENGINE NOT INSTALLED" icon="server" color="#B54708" title="This feature needs the AI engine">
-            Your request is saved, but nothing runs until the execution engine is installed (Phase 3). Screens say so instead of showing made-up results.
+          <StateCard label="NO AI MODEL" icon="server" color="#B54708" title="No AI model is configured">
+            Your task is saved and waits. Nothing is sent anywhere until an administrator configures an approved model. Screens say so instead of showing made-up results.
           </StateCard>
         )}
 

@@ -1,0 +1,9 @@
+{
+  "_comment": "Provisional SLO targets (edit per deployment). Rationale in docs/PERFORMANCE.md. loadtest.py marks a scenario FAIL if a threshold is exceeded.",
+  "read_p95_ms": 300,
+  "read_p99_ms": 800,
+  "write_p95_ms": 600,
+  "error_rate_max": 0.01,
+  "queue_wait_p95_s": 30,
+  "availability_target": 0.995
+}

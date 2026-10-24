@@ -36,7 +36,7 @@ export function StatusStrip() {
       ) : (
         <>
           <span className="font-mono font-medium tracking-[.06em]">PREVIEW</span>
-          <span className="text-line-strong">The AI agent engine is not installed yet. Tasks are saved securely but nothing is executed.</span>
+          <span className="text-line-strong">Plans need your approval before anything runs. Sensitive steps ask again, one by one.</span>
         </>
       )}
     </div>
@@ -275,10 +275,7 @@ function Header({ onOpenNav }: { onOpenNav: () => void }) {
           Demo
         </span>
       ) : (
-        <span title="The AI agent engine is not installed yet (Phase 3)" className="inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md bg-warning-soft px-[9px] text-xs font-medium text-warning">
-          <Icon name="server" size={13} />
-          <span className="hidden min-[480px]:inline">Agent not installed</span>
-        </span>
+        <AgentPill />
       )}
       <Link href="/help" aria-label="Help" title="Help" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-3 hover:bg-line-soft hover:text-ink-3">
         <Icon name="circle-help" size={18} />
@@ -372,5 +369,29 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
       {navOpen && <MobileNav onClose={() => setNavOpen(false)} />}
     </div>
+  );
+}
+
+/** Top-bar agent indicator, from GET /agent/status (via the dashboard query). */
+function AgentPill() {
+  const q = useQuery({ queryKey: ["agent-status"], queryFn: () => api.getAgentStatus(), staleTime: 30_000 });
+  const st = q.data?.status;
+  const meta =
+    st === "ok"
+      ? { label: "Agent ready", icon: "bot", cls: "bg-success-soft text-success" }
+      : st === "degraded"
+        ? { label: "Agent degraded", icon: "triangle-alert", cls: "bg-warning-soft text-warning" }
+        : st === "not_configured"
+          ? { label: "No AI model", icon: "server", cls: "bg-neutral-soft text-ink-3" }
+          : { label: q.isLoading ? "Agent…" : "Agent offline", icon: "server", cls: "bg-neutral-soft text-ink-3" };
+  return (
+    <Link
+      href="/security"
+      title={q.data?.message ?? "Agent status"}
+      className={cx("inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md px-[9px] text-xs font-medium hover:no-underline", meta.cls)}
+    >
+      <Icon name={meta.icon} size={13} />
+      <span className="hidden min-[480px]:inline">{meta.label}</span>
+    </Link>
   );
 }

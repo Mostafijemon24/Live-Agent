@@ -1,0 +1,31 @@
+[
+  {
+    "stage": "baseline:10vu",
+    "vus": 10,
+    "seconds": 60,
+    "requests": 977,
+    "rps": 16.3,
+    "read_p50_ms": 14.7,
+    "read_p95_ms": 29.0,
+    "read_p99_ms": 137.2,
+    "write_p95_ms": 52.5,
+    "error_rate": 0.0297,
+    "throttled_429_503": 0,
+    "codes": {
+      "0": 29,
+      "200": 843,
+      "201": 105
+    },
+    "p95_by_endpoint_ms": {
+      "agent_status": 190.0,
+      "approvals": 20.2,
+      "create_task": 52.5,
+      "dashboard": 37.4,
+      "files": 17.8,
+      "notifications": 23.4,
+      "task_detail": 21.9,
+      "task_list": 21.3
+    },
+    "slo": "FAIL"
+  }
+]

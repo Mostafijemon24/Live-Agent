@@ -14,7 +14,7 @@ const DEMO_POINTS: [string, string][] = [
 const REAL_POINTS: [string, string][] = [
   ["lock", "Passwords are hashed on the server. Your session lives in a secure, HttpOnly cookie — nothing secret is kept in this browser."],
   ["history", "Sign-in attempts are rate limited, and sign-ins and security changes are recorded in your activity log."],
-  ["server", "The AI agent engine is not installed yet. You can set up your workspace and save tasks, but nothing is executed."],
+  ["server", "Every plan needs your approval before anything runs, and sensitive steps ask again, one by one."],
 ];
 
 /** Two-column layout shared by the sign-in, sign-up, recovery and verification pages. */

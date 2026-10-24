@@ -10,6 +10,7 @@ import { fmtDateTime } from "@/lib/format";
 import { MODE_LABEL, RISK_STEP, TASK_STATUS, TASK_TYPE_LABEL } from "@/lib/labels";
 import { Button, DefList, ErrorState, Icon, Skeleton, cx } from "@/components/ui";
 import { PlanModal, type PlanModalKind } from "./PlanModals";
+import { StepPolicy } from "./StepPolicy";
 
 const card = "rounded-[10px] border border-line bg-surface";
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -79,7 +80,7 @@ export function PlanReviewPage() {
 function PlanBody({ task: t }: { task: Task }) {
   if (t.status === "planning") return <Planning />;
   if (t.status === "awaiting_approval" && t.plan) return <Review key={t.id} task={t} plan={t.plan} />;
-  if (!t.plan && t.waiting_for === "planning_service") return <WaitingForPlanner task={t} />;
+  if (!t.plan && (t.waiting_for === "planning_service" || t.waiting_for === "approval")) return <WaitingForPlanner task={t} />;
   return (
     <div className={cx(card, "flex flex-wrap items-center gap-3 px-4 py-3")}>
       <Icon name="info" size={17} className="text-primary" />
@@ -153,10 +154,17 @@ function WaitingForPlanner({ task: t }: { task: Task }) {
             <Icon name="server" size={20} />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="text-[15px] font-semibold">Waiting for the planning service</h2>
+            <h2 className="text-[15px] font-semibold">{t.waiting_for === "approval" ? "Waiting for your approval to plan" : "Waiting to be planned"}</h2>
             <p className="mt-1 text-[13.5px] text-ink-3 [text-wrap:pretty]">
-              The AI planner isn&apos;t installed yet (Phase 3). Your task is saved and queued; a plan will appear here once the planner is connected. Nothing has run.
+              {t.waiting_for === "approval"
+                ? "The configured AI model is an external service, so sending the task text to it needs a one-time approval. Nothing has been sent yet."
+                : "Your task is queued for the planner. If no AI model is configured, it waits here and nothing is sent anywhere. Nothing has run."}
             </p>
+            {t.waiting_for === "approval" && (
+              <Link href="/approvals" className="mt-2 inline-block text-[13.5px] font-medium">
+                Review the approval request
+              </Link>
+            )}
             <div className="mt-3 flex flex-wrap gap-2">
               <LinkButton href={`/tasks/${t.id}`}>View task</LinkButton>
               {canCancel && (
@@ -189,11 +197,14 @@ function WaitingForPlanner({ task: t }: { task: Task }) {
 
 function Review({ task: t, plan }: { task: Task; plan: TaskPlan }) {
   const steps = [...plan.steps].sort((a, b) => a.position - b.position);
-  const [sel, setSel] = useState<Record<string, boolean>>(() => Object.fromEntries(steps.map((s) => [s.id, s.selected])));
+  const isBlocked = (st: (typeof steps)[number]) => st.state === "blocked" || st.policy?.outcome === "deny";
+  const [sel, setSel] = useState<Record<string, boolean>>(() => Object.fromEntries(steps.map((s) => [s.id, s.selected && !isBlocked(s)])));
+  const blocked = steps.filter(isBlocked);
   const [modal, setModal] = useState<PlanModalKind | null>(null);
   const selectedIds = steps.filter((s) => sel[s.id]).map((s) => s.id);
   const tools = [...new Set(steps.map((s) => s.tool))];
-  const irrev = steps.filter((s) => s.requires_approval);
+  const irrev = steps.filter((s) => s.requires_approval && !isBlocked(s));
+  const dests = [...new Set(steps.filter((s) => !isBlocked(s)).flatMap((s) => s.destinations ?? []))];
   const sources = [...plan.data_sources, ...t.attachments.map((a) => `Attached: ${a.name}`)];
   const can = (a: Task["allowed_actions"][number]) => t.allowed_actions.includes(a);
   const canApprove = can("approve_plan");
@@ -206,10 +217,27 @@ function Review({ task: t, plan }: { task: Task; plan: TaskPlan }) {
     <div className="flex flex-wrap items-start gap-4">
       <div className="flex min-w-0 flex-[2_1_520px] flex-col gap-4">
         <Goal prompt={t.prompt}>
+          {plan.summary && <p className="mt-2 text-[13.5px] text-ink-2 [text-wrap:pretty]">{plan.summary}</p>}
           <p className="mt-2.5 text-[13.5px] text-muted [text-wrap:pretty]">
-            The Agent will follow the steps below. Steps that change live systems, publish, send or share will ask for their own approval before they run.
+            Every step below was checked by the policy engine. Steps marked “Needs approval” ask again, one by one, right before they run.
+            The AI model only proposed the steps; permissions and approvals are decided by the server.
           </p>
+          {plan.provider && (
+            <p className="mt-1.5 text-[12.5px] text-muted">
+              Planned by {plan.provider}
+              {plan.provider_location ? ` (${plan.provider_location === "external" ? "external service" : "your own infrastructure"})` : ""}
+              {plan.version && plan.version > 1 ? ` · plan version ${plan.version}` : ""}
+            </p>
+          )}
         </Goal>
+        {blocked.length > 0 && (
+          <div role="note" className="flex items-start gap-2.5 rounded-[10px] border border-danger-line bg-danger-soft px-4 py-3 text-[13.5px]">
+            <Icon name="shield-ban" size={17} className="mt-px text-danger" />
+            <span className="[text-wrap:pretty]">
+              {blocked.length === 1 ? "1 step is" : `${blocked.length} steps are`} blocked by policy and can&apos;t be selected. Adjust Settings (allowed domains, tool permissions) and request a new plan if you need them.
+            </span>
+          </div>
+        )}
         <section className={card}>
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
             <h2 className="text-[15px] font-semibold">Step-by-step plan</h2>
@@ -220,12 +248,16 @@ function Review({ task: t, plan }: { task: Task; plan: TaskPlan }) {
           {steps.map((st) => {
             const r = RISK_STEP[st.risk];
             const n = pad2(st.position);
+            const off = isBlocked(st);
             return (
-              <label key={st.id} className="flex cursor-pointer items-start gap-3.5 border-b border-line-soft px-5 py-3.5 last:border-b-0">
+              <label
+                key={st.id}
+                className={cx("flex items-start gap-3.5 border-b border-line-soft px-5 py-3.5 last:border-b-0", off ? "cursor-not-allowed bg-subtle" : "cursor-pointer")}
+              >
                 <input
                   type="checkbox"
-                  checked={!!sel[st.id]}
-                  disabled={!canApprove}
+                  checked={!!sel[st.id] && !off}
+                  disabled={!canApprove || off}
                   onChange={(e) => setSel((s) => ({ ...s, [st.id]: e.target.checked }))}
                   aria-label={`Include step ${n}`}
                   className="mt-[3px] h-4 w-4 flex-none accent-primary"
@@ -237,10 +269,10 @@ function Review({ task: t, plan }: { task: Task; plan: TaskPlan }) {
                     <span className="rounded-md px-2 py-px text-xs font-medium" style={{ color: r.fg, background: r.bg }}>
                       {r.label}
                     </span>
-                    {st.requires_approval && (
+                    {st.requires_approval && !off && !st.policy && (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-warning">
                         <Icon name="shield-alert" size={13} />
-                        Separate approval at run time
+                        One-time approval when it runs
                       </span>
                     )}
                   </span>
@@ -248,6 +280,7 @@ function Review({ task: t, plan }: { task: Task; plan: TaskPlan }) {
                     {st.tool}
                     {st.description ? ` · ${st.description}` : ""}
                   </span>
+                  <StepPolicy step={st} />
                 </span>
               </label>
             );
@@ -284,7 +317,7 @@ function Review({ task: t, plan }: { task: Task; plan: TaskPlan }) {
             <div className="mb-1.5 text-[12.5px] text-muted">External destinations</div>
             <div className="flex gap-2 text-[13.5px]">
               <Icon name="send" size={14} className="mt-[3px] text-warning" />
-              {plan.destination ?? "None — everything stays in this workspace"}
+              {dests.length ? dests.join(", ") : (plan.destination ?? "None — everything stays in this workspace")}
             </div>
           </div>
           <div>
@@ -302,7 +335,7 @@ function Review({ task: t, plan }: { task: Task; plan: TaskPlan }) {
           </div>
           <div>
             <div className="mb-1 text-[12.5px] text-muted">Estimated usage and cost</div>
-            <div className="text-[13.5px] text-ink-3">Shown when the backend can calculate it.</div>
+            <div className="text-[13.5px] text-ink-3">Model usage is recorded per call and counted against the workspace allowance (Settings → Usage). Cost estimates are not shown.</div>
           </div>
         </section>
 
@@ -332,7 +365,7 @@ function Review({ task: t, plan }: { task: Task; plan: TaskPlan }) {
             <p className="mt-1 text-xs text-muted [text-wrap:pretty]">
               {DEMO_MODE
                 ? "Demo: approving only changes the status here. Approval will be enforced by the server later."
-                : "Approving records your decision. Nothing runs until the execution engine is installed (Phase 3), and high-impact steps still need their own approval."}
+                : "Approving queues the selected steps. Each is checked again right before it runs, and steps that need approval will ask you first."}
             </p>
           </div>
         )}

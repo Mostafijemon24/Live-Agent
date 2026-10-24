@@ -70,7 +70,7 @@ def test_migrations_upgrade_downgrade_upgrade() -> None:
     run_migrations(url)
     eng = create_engine(url)
     with eng.connect() as c:
-        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0003"
+        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0006"
         tables = set(c.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public'")).scalars())
     eng.dispose()
     assert {"users", "workspaces", "tasks", "audit_events", "deletion_requests", "jobs", "usage_counters"} <= tables
@@ -182,7 +182,9 @@ def test_dashboard_reflects_real_data(make_user: Any) -> None:
         "completed_week": 0,
         "needs_attention": 0,
     }
-    assert d["agent"]["status"] == "not_connected" and d["agent"]["planner"] == "not_configured"
+    # The test environment configures no model: the agent says so instead of pretending to work.
+    assert d["agent"]["status"] == "not_configured" and d["agent"]["planner"] == "not_configured"
+    assert d["agent"]["provider"]["configured"] is False and "Nothing is sent" in d["agent"]["message"]
     assert d["setup"] == {"verify_email": True, "privacy": False, "integration": False, "first_task": False}
     assert d["unread_notifications"] == 1  # welcome note
     create_task(api)
@@ -193,7 +195,7 @@ def test_dashboard_reflects_real_data(make_user: Any) -> None:
 def test_settings_preferences_and_validation(make_user: Any) -> None:
     api = make_user()
     s = api.get("/settings").json()
-    assert s["enforced"] is False and s["workspace"]["can_edit"] is True and s["workspace"]["privacy_mode"] == "strict"
+    assert s["enforced"] is True and s["workspace"]["can_edit"] is True and s["workspace"]["privacy_mode"] == "strict"
     r = api.patch("/me/preferences", {"name": "New Name", "timezone": "Asia/Dhaka", "notifications": {"digest": True}})
     assert (
         r.status_code == 200
@@ -241,7 +243,7 @@ def test_onboarding_saves_preferences(make_user: Any) -> None:
     assert api.post("/me/onboarding", {"goals": ["Bad Label!"], "where": [], "ai_rules": {}}).status_code == 422
 
 
-def test_automations_scheduled_stay_paused(make_user: Any) -> None:
+def test_automations_schedule_and_toggle(make_user: Any) -> None:
     api = make_user()
     base = {
         "template": "SEO report",
@@ -253,9 +255,12 @@ def test_automations_scheduled_stay_paused(make_user: Any) -> None:
         "/automations",
         {"name": "Weekly", "trigger": "schedule", "frequency": "weekly", "day": "Monday", "time": "08:00", **base},
     ).json()
-    assert sched["enabled"] is False and sched["schedule_text"] == "Every Monday at 08:00" and sched["ref"] == "AU-1"
+    assert sched["enabled"] is True and sched["schedule_text"] == "Every Monday at 08:00" and sched["ref"] == "AU-1"
+    assert "creates a plan for review" in sched["next_run_text"]
+    r = api.patch(f"/automations/{sched['id']}", {"enabled": False})
+    assert r.status_code == 200 and r.json()["enabled"] is False and r.json()["next_run_text"] == "Paused"
     r = api.patch(f"/automations/{sched['id']}", {"enabled": True})
-    assert r.status_code == 409 and r.json()["error"]["code"] == "scheduler_not_configured"
+    assert r.status_code == 200 and r.json()["enabled"] is True
     manual = api.post("/automations", {"name": "Manual", "trigger": "manual", **base}).json()
     assert manual["enabled"] is True
     run = api.post(f"/automations/{manual['id']}/run")
@@ -266,27 +271,48 @@ def test_automations_scheduled_stay_paused(make_user: Any) -> None:
     )
 
 
-def test_integrations_cannot_connect_in_phase2(make_user: Any) -> None:
+def test_integrations_only_real_adapters_are_connectable(make_user: Any, owner_engine: Any) -> None:
     api = make_user()
-    items = api.get("/integrations").json()
-    assert {i["key"] for i in items} == {"wordpress", "notion", "cloud_storage", "email", "browser", "ai_provider"}
-    assert all(i["connectable"] is False and i["status"] in ("not_connected", "backend_required") for i in items)
-    r = api.post("/integrations/wordpress/connect")
-    assert r.status_code == 409 and r.json()["error"]["code"] == "integration_not_available"
+    items = {i["key"]: i for i in api.get("/integrations").json()}
+    assert set(items) == {"wordpress", "notion", "cloud_storage", "email", "browser", "ai_provider"}
+    # Only WordPress (read-only) is a real adapter; nothing is shown as connected unless it is.
+    assert [k for k, i in items.items() if i["connectable"]] == ["wordpress"]
+    assert items["wordpress"]["operational"] is True and items["notion"]["operational"] is False
+    assert all(i["status"] in ("not_connected", "backend_required") for i in items.values())
+    for key in ("notion", "email", "cloud_storage", "ai_provider"):
+        r = api.post(f"/integrations/{key}/connect")
+        assert r.status_code == 409 and r.json()["error"]["code"] == "integration_not_available"
     assert api.post("/integrations/unknown/connect").status_code == 404
+    # WordPress: https only, the domain must be allowlisted first, and it is verified by a worker.
+    assert api.post("/integrations/wordpress/connect", {"site_url": "http://example.com"}).status_code == 422
+    r = api.post("/integrations/wordpress/connect", {"site_url": "https://blog.example.com"})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "domain_not_allowed"
+    api.patch("/workspace/settings", {"allowed_domains": ["example.com"]})
+    r = api.post("/integrations/wordpress/connect", {"site_url": "https://blog.example.com/"})
+    assert r.status_code == 202
+    assert r.json()["status"] == "not_connected" and r.json()["site_url"] == "https://blog.example.com"
+    with owner_engine.connect() as c:
+        kinds = c.execute(
+            text("SELECT kind, queue FROM jobs WHERE workspace_id = :w AND kind = 'integration.verify'"),
+            {"w": api.me["workspace"]["id"]},
+        ).all()
+    assert [(k.kind, k.queue) for k in kinds] == [("integration.verify", "tools")]
 
 
 def test_security_status_is_honest(make_user: Any) -> None:
     api = make_user()
     s = api.get("/security/status").json()
-    assert s["privacy_enforced"] is False
+    assert s["privacy_enforced"] is True
     checks = {c["key"]: c["status"] for c in s["checklist"]}
     assert (
         checks["csrf"] == "enforced"
         and checks["tenant_isolation"] == "enforced"
         and checks["rate_limits"] == "enforced"
     )
-    assert checks["malware_scan"] == "not_configured" and checks["egress"] == "not_configured"
+    assert checks["malware_scan"] == "not_configured" and checks["backups"] == "not_configured"
+    assert checks["egress"] == "enforced" and checks["deletion"] == "enforced" and checks["policy_engine"] == "enforced"
+    assert checks["secrets"] == "partial" and checks["audit_log"] == "partial" and checks["sandbox"] == "partial"
+    assert "No AI model is configured" in s["ai_provider_policy"]
     assert checks["session_cookies"] == "partial"  # no Secure flag outside production
 
 
@@ -340,3 +366,47 @@ def test_production_config_guards(monkeypatch: Any) -> None:
     for override, needle in bad_cases:
         with pytest.raises(ValidationError, match=needle):
             Settings(**{**good, **override})
+
+
+def test_worker_role_skips_http_only_guards_but_keeps_the_rest(monkeypatch: Any) -> None:
+    """Workers neither serve HTTP nor send mail; they must still refuse weak secrets and unsafe egress."""
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    worker: dict[str, Any] = {
+        "env": "production",
+        "process_role": "worker",
+        "mail_backend": "disabled",
+        "trust_proxy_headers": False,
+        "app_origin": "http://localhost:3000",
+        "database_url": "postgresql+psycopg://steward_worker:Str0ng-Random-Value@db/x",
+        "worker_database_url": "postgresql+psycopg://steward_worker:Str0ng-Random-Value@db/x",
+        "approval_signing_key": "k" * 40,
+    }
+    assert Settings(**worker).process_role == "worker"
+    for override, needle in [
+        ({"approval_signing_key": "short"}, "APPROVAL_SIGNING_KEY"),
+        ({"worker_database_url": "postgresql+psycopg://steward_worker:change-me@db/x"}, "WORKER_DATABASE_URL"),
+        ({"egress_allow_http": True}, "EGRESS"),
+        ({"model_provider": "mock"}, "MODEL_PROVIDER"),
+    ]:
+        with pytest.raises(ValidationError, match=needle):
+            Settings(**{**worker, **override})
+    # The same settings without the worker role are refused (default role is the strict "api").
+    with pytest.raises(ValidationError, match="MAIL_BACKEND"):
+        Settings(**{k: v for k, v in worker.items() if k != "process_role"})
+
+
+def test_api_refuses_to_start_with_the_worker_role(monkeypatch: Any) -> None:
+    from app import main
+    from app.core import config
+
+    monkeypatch.setenv("PROCESS_ROLE", "worker")
+    config.get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="PROCESS_ROLE=worker"):
+            main.create_app()
+    finally:
+        monkeypatch.delenv("PROCESS_ROLE")
+        config.get_settings.cache_clear()

@@ -18,15 +18,16 @@ import {
 import { fmtDateTime, fmtTime, fmtTimeSec } from "@/lib/format";
 import { useUi } from "@/lib/session";
 import { Banner, Badge, ErrorState, Icon, Skeleton } from "@/components/ui";
+import { StepPolicy, StepResult } from "@/features/plan/StepPolicy";
 import { integrationLabel, waitingLabel } from "./shared";
 
 const card = "rounded-[10px] border border-line bg-surface";
 
-/** Shown wherever a plan would be, while the Phase 3 planner is not installed. */
+/** Shown wherever a plan would be, while the task waits to be planned. */
 export function PlannerBanner() {
   return (
-    <Banner tone="info" icon="hourglass" title="Waiting for the planning service">
-      The AI planner isn&apos;t installed yet (Phase 3). This task is saved and queued; nothing has run.
+    <Banner tone="info" icon="hourglass" title="Waiting to be planned">
+      The task is queued for the planner. If no AI model is configured, it waits here and nothing is sent anywhere. Nothing runs until you approve a plan.
     </Banner>
   );
 }
@@ -57,6 +58,8 @@ export function SummaryTab({ task, onAnswer, onCopyError }: { task: Task; onAnsw
     ["Integration", integrationLabel(task.integration_key)],
     ["Created", fmtDateTime(task.created_at)],
     ["Updated", fmtDateTime(task.updated_at)],
+    ...(task.started_at ? ([["Started", fmtDateTime(task.started_at)]] as [string, ReactNode][]) : []),
+    ...(task.finished_at ? ([["Finished", fmtDateTime(task.finished_at)]] as [string, ReactNode][]) : []),
     ["Next action", waiting ?? TASK_NEXT[task.status]],
   ];
   return (
@@ -107,7 +110,7 @@ export function SummaryTab({ task, onAnswer, onCopyError }: { task: Task; onAnsw
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-[15px] font-semibold">Result</h2>
               <span className="rounded-[5px] bg-warning-soft px-[7px] py-px text-[11.5px] font-medium text-warning">
-                AI-generated summary{DEMO_MODE ? " · sample" : ""}
+                {DEMO_MODE ? "AI-generated summary · sample" : "Summary of the step results"}
               </span>
             </div>
             <Field label="Outcome">
@@ -186,10 +189,10 @@ export function PlanTab({ task }: { task: Task }) {
                     <span className="rounded-md px-2 py-px text-xs font-medium" style={{ color: risk.fg, background: risk.bg }}>
                       {risk.label}
                     </span>
-                    {st.requires_approval && (
+                    {st.requires_approval && st.state !== "blocked" && (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-warning">
                         <Icon name="shield-alert" size={13} />
-                        Separate approval at run time
+                        One-time approval when it runs
                       </span>
                     )}
                     {!st.selected && <span className="text-xs text-muted">Not selected</span>}
@@ -198,6 +201,8 @@ export function PlanTab({ task }: { task: Task }) {
                     {st.tool} · {time}
                   </div>
                   {st.description && <div className="mt-0.5 text-[12.5px] text-muted [text-wrap:pretty]">{st.description}</div>}
+                  <StepPolicy step={st} />
+                  <StepResult step={st} />
                 </div>
               </li>
             );
@@ -357,13 +362,11 @@ export function OutputsTab({ task }: { task: Task }) {
   if (q.isLoading) return <Loading />;
   if (q.error) return <ErrorState error={q.error} onRetry={() => q.refetch()} retrying={q.isFetching} />;
   const arts = (q.data?.artifacts ?? []).filter((a) => a.task_id === task.id);
-  const download = () =>
-    notice(
-      "Downloads arrive with the execution engine",
-      DEMO_MODE
-        ? "Artifacts are stored in private storage and served through short-lived signed links once the backend exists. This sample file has no content."
-        : "Outputs are kept in private storage and served through short-lived signed links. Artifact storage arrives with the execution engine (Phase 3), so there is no file to download yet.",
-    );
+  const download = (id: string) => {
+    const url = api.artifactDownloadUrl(id);
+    if (url) window.location.assign(url);
+    else notice("Sample file", "This demo report has no stored content to download.");
+  };
   return (
     <section className={card}>
       {arts.length === 0 ? (
@@ -386,7 +389,7 @@ export function OutputsTab({ task }: { task: Task }) {
               </span>
               <button
                 type="button"
-                onClick={download}
+                onClick={() => download(a.id)}
                 aria-label={`Download ${a.name}`}
                 className="grid h-8 w-8 place-items-center rounded-[7px] border border-line-strong bg-surface hover:bg-subtle"
               >

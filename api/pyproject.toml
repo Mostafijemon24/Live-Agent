@@ -1,7 +1,7 @@
 [project]
 name = "steward-api"
-version = "0.2.0"
-description = "Steward AI agent workspace — Phase 2 API foundation"
+version = "0.3.0"
+description = "Steward AI agent workspace — API, agent engine and workers"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
@@ -15,12 +15,12 @@ dependencies = [
   "email-validator==2.3.0",
   "argon2-cffi==25.1.0",
   "python-multipart==0.0.32",
+  "httpx==0.28.1",
 ]
 
 [dependency-groups]
 dev = [
   "pytest==9.1.1",
-  "httpx==0.28.1",
   "ruff==0.17.2",
   "mypy==2.4.0",
 ]

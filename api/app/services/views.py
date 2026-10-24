@@ -13,6 +13,7 @@ from app.domain.enums import TaskStatus
 from app.domain.task_states import allowed_actions
 from app.models import (
     ApprovalRequest,
+    Artifact,
     AuditEvent,
     DeletionRequest,
     FileRecord,
@@ -47,11 +48,56 @@ def task_summary(t: Task) -> S.TaskSummaryOut:
     )
 
 
+def step_out(s: TaskStep) -> S.TaskStepOut:
+    out = dict(s.output or {})
+    pol = s.policy or {}
+    visible = {k: v for k, v in out.items() if not k.startswith("_")} if out else None
+    return S.TaskStepOut(
+        id=s.id,
+        position=s.position,
+        title=s.title,
+        description=s.description,
+        tool=s.tool,
+        risk=s.risk,
+        requires_approval=s.requires_approval,
+        state=s.state,
+        selected=s.selected,
+        started_at=s.started_at,
+        finished_at=s.finished_at,
+        step_key=s.step_key or f"s{s.position}",
+        tool_id=s.tool_id,
+        args=dict(s.args or {}),
+        args_hash=s.args_hash,
+        impact=s.impact,
+        classifications=list(s.classifications or []),
+        destinations=list(s.destinations or []),
+        policy=S.StepPolicyOut(
+            outcome=pol["outcome"],
+            reasons=list(pol.get("reasons", [])),
+            data_leaves=bool(pol.get("data_leaves")),
+            classification=str(pol.get("classification", "")),
+            version=str(pol.get("version", "")),
+        )
+        if pol.get("outcome")
+        else None,
+        output_summary=out.get("_summary"),
+        output=visible,
+        error=s.error,
+        approval_id=s.approval_id,
+        attempts=s.attempts,
+        artifact_id=uuid.UUID(out["_artifact_id"]) if out.get("_artifact_id") else None,
+    )
+
+
 def task_full(db: Session, t: Task) -> S.TaskOut:
     steps = (
         db.execute(
             select(TaskStep)
-            .where(TaskStep.workspace_id == t.workspace_id, TaskStep.task_id == t.id)
+            .where(
+                TaskStep.workspace_id == t.workspace_id,
+                TaskStep.task_id == t.id,
+                TaskStep.plan_version == max(t.plan_version, 1),
+            )
             .order_by(TaskStep.position)
         )
         .scalars()
@@ -70,11 +116,20 @@ def task_full(db: Session, t: Task) -> S.TaskOut:
     if steps:
         meta = t.plan_meta or {}
         plan = S.TaskPlanOut(
-            steps=[S.TaskStepOut.model_validate(s) for s in steps],
+            steps=[step_out(s) for s in steps],
             data_sources=list(meta.get("data_sources", [])),
             destination=meta.get("destination"),
+            version=max(t.plan_version, 1),
+            summary=t.plan_summary,
+            provider=meta.get("provider"),
+            provider_location=meta.get("provider_location"),
         )
     report = S.TaskReportOut(**t.report) if t.report else None
+    arts = db.execute(
+        select(Artifact)
+        .where(Artifact.workspace_id == t.workspace_id, Artifact.task_id == t.id)
+        .order_by(Artifact.created_at)
+    ).scalars()
     base = task_summary(t).model_dump()
     return S.TaskOut(
         **base,
@@ -85,6 +140,20 @@ def task_full(db: Session, t: Task) -> S.TaskOut:
         plan=plan,
         report=report,
         allowed_actions=allowed_actions(TaskStatus(t.status), has_plan=plan is not None),
+        data_classification=t.data_classification,
+        started_at=t.started_at,
+        finished_at=t.finished_at,
+        artifacts=[
+            S.TaskArtifactOut(
+                id=a.id,
+                name=a.name,
+                kind=a.kind,
+                provenance=a.provenance,
+                size_bytes=a.size_bytes,
+                created_at=a.created_at,
+            )
+            for a in arts
+        ],
     )
 
 
@@ -118,6 +187,10 @@ def approval_out(a: ApprovalRequest, refs: dict[uuid.UUID, str]) -> S.ApprovalOu
         decided_at=a.decided_at,
         decision_note=a.decision_note,
         execution_state=a.execution_state,
+        operation=a.operation,
+        targets=list(a.targets or []),
+        policy_version=a.policy_version,
+        step_id=a.step_id,
     )
 
 
@@ -136,7 +209,7 @@ def files_out(db: Session, workspace_id: uuid.UUID, rows: list[FileRecord]) -> l
                     DeletionRequest.workspace_id == workspace_id,
                     DeletionRequest.target_type == "file",
                     DeletionRequest.target_id.in_(ids),
-                    DeletionRequest.status.in_(("pending_approval", "approved_blocked")),
+                    DeletionRequest.status.in_(("pending_approval", "approved_blocked", "approved")),
                 )
             ).scalars()
         )
@@ -154,6 +227,8 @@ def files_out(db: Session, workspace_id: uuid.UUID, rows: list[FileRecord]) -> l
             error_message=f.error_message,
             scan_status=f.scan_status,
             deletion_requested=f.id in pending,
+            deleted_at=f.deleted_at,
+            restorable_until=f.purge_after,
         )
         for f in rows
     ]

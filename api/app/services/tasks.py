@@ -11,13 +11,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app import schemas as S
-from app.adapters.phase2 import OutboxJobQueue, planner
 from app.core.config import get_settings
 from app.core.db import utcnow
 from app.core.deps import Context
 from app.core.errors import ApiError
-from app.domain.enums import FileStatus, TaskStatus, WaitingFor
+from app.domain.enums import FileStatus, JobQueue, TaskStatus, WaitingFor
 from app.domain.task_states import assert_transition, require_action
+from app.engine import queue as Q
+from app.engine.providers import get_provider
 from app.models import FileRecord, Task, TaskAttachment, TaskEvent, TaskStep, Workspace
 from app.services.usage import bump_usage, current_period, usage_value
 from app.services.views import task_full, task_ref
@@ -100,12 +101,22 @@ def create_task(ctx: Context, body: S.CreateTaskIn, idempotency_key: str | None)
             details=[{"field": "integration_key", "message": "Unknown integration."}],
         )
     if body.integration_key is not None:
-        raise ApiError(
-            422,
-            "integration_not_connected",
-            "That integration is not connected. Connections arrive with the Phase 3 integration service.",
-            details=[{"field": "integration_key", "message": "Not connected."}],
-        )
+        from app.models import IntegrationConnection
+
+        connected = db.execute(
+            select(IntegrationConnection.id).where(
+                IntegrationConnection.workspace_id == ctx.workspace.id,
+                IntegrationConnection.key == body.integration_key,
+                IntegrationConnection.status == "connected",
+            )
+        ).first()
+        if not connected:
+            raise ApiError(
+                422,
+                "integration_not_connected",
+                "That integration is not connected. Connect it on the Integrations page first.",
+                details=[{"field": "integration_key", "message": "Not connected."}],
+            )
 
     quota = get_settings().monthly_task_quota
     if usage_value(db, ctx.workspace.id, current_period(), "tasks_created") >= quota:
@@ -125,14 +136,17 @@ def create_task(ctx: Context, body: S.CreateTaskIn, idempotency_key: str | None)
             if fid not in found:
                 raise ctx.deny("file", fid, "file")
         not_usable = [
-            f.original_name for f in files if f.status not in (FileStatus.ready.value, FileStatus.unscanned.value)
+            f.original_name
+            for f in files
+            if f.status not in (FileStatus.ready.value, FileStatus.unscanned.value) or f.deleted_at is not None
         ]
         if not_usable:
             raise ApiError(422, "file_not_ready", f"These files can't be attached yet: {', '.join(not_usable)[:300]}")
 
     title = (body.title or "").strip() or _suggest_title(body.prompt)
     number = _next_number(db, ctx.workspace.id, "task_seq")
-    planner_ready = planner.is_available()
+    provider = get_provider().info
+    planner_ready = provider.configured
     t = Task(
         workspace_id=ctx.workspace.id,
         number=number,
@@ -142,8 +156,8 @@ def create_task(ctx: Context, body: S.CreateTaskIn, idempotency_key: str | None)
         type=body.type.value,
         priority=body.priority.value,
         mode=body.mode.value,
-        integration_key=None,
-        waiting_for=None if planner_ready else WaitingFor.planning_service.value,
+        integration_key=body.integration_key,
+        waiting_for=WaitingFor.planning_service.value,
         idempotency_key=idempotency_key,
         created_by=ctx.user.id,
     )
@@ -157,25 +171,28 @@ def create_task(ctx: Context, body: S.CreateTaskIn, idempotency_key: str | None)
     for fid in file_ids:
         db.add(TaskAttachment(workspace_id=ctx.workspace.id, task_id=t.id, file_id=fid))
     add_event(ctx, t, "task.created", f"Task created by {ctx.user.name}")
-    queue_result = OutboxJobQueue(db).enqueue(
+    job_id = Q.enqueue(
+        db,
         workspace_id=ctx.workspace.id,
         kind="task.plan",
+        queue=JobQueue.orchestrator,
         task_id=t.id,
-        payload={"mode": t.mode},
         dedupe_key=f"plan:{t.id}",
     )
-    if not planner_ready:
+    if planner_ready:
+        add_event(ctx, t, "task.queued", f"Queued for planning with {provider.label}.")
+    else:
         add_event(
             ctx,
             t,
             "task.waiting",
-            "Waiting for the planning service — it is not installed yet (Phase 3). Nothing has run.",
+            "No approved AI model is configured, so the task waits. Nothing is sent anywhere.",
             "warn",
         )
     ctx.log(
         "task.created",
         "task",
-        f"Task {task_ref(number)} created" + ("" if planner_ready else " — waiting for the planning service"),
+        f"Task {task_ref(number)} created" + ("" if planner_ready else " — waiting: no AI model configured"),
         target_type="task",
         target_id=str(t.id),
         task_id=t.id,
@@ -183,7 +200,7 @@ def create_task(ctx: Context, body: S.CreateTaskIn, idempotency_key: str | None)
             "type": t.type,
             "mode": t.mode,
             "attachments": len(file_ids),
-            "job_dispatched": queue_result.dispatched,
+            "job_id": str(job_id) if job_id else None,
         },
     )
     bump_usage(db, ctx.workspace.id, "tasks_created", 1)
@@ -194,7 +211,8 @@ def create_task(ctx: Context, body: S.CreateTaskIn, idempotency_key: str | None)
 def _suggest_title(prompt: str) -> str:
     import re
 
-    words = re.sub(r"[^\w\s&'-]", "", prompt).split()
+    prompt = re.sub(r"https?://([^/\s:]+)\S*", r"\1", prompt)  # keep only the host of URLs
+    words = re.sub(r"[^\w\s&'.-]", "", prompt).split()
     t = " ".join(words[:7])
     return (t[:1].upper() + t[1:] + ("…" if len(words) > 7 else "")) or "Untitled task"
 
@@ -259,9 +277,21 @@ def cancel(ctx: Context, task_id: uuid.UUID, reason: str | None) -> S.TaskOut:
         .where(
             TaskStep.workspace_id == ctx.workspace.id,
             TaskStep.task_id == t.id,
-            TaskStep.state.in_(("not_started", "in_progress", "paused", "waiting_for_input")),
+            TaskStep.state.in_(("not_started", "in_progress", "paused", "waiting_for_input", "awaiting_approval")),
         )
         .values(state="cancelled")
+    )
+    Q.cancel_task_jobs(ctx.db, ctx.workspace.id, t.id)
+    from app.models import ApprovalRequest
+
+    ctx.db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.workspace_id == ctx.workspace.id,
+            ApprovalRequest.task_id == t.id,
+            ApprovalRequest.status == "pending",
+        )
+        .values(status="expired", decision_note="Task cancelled", updated_at=utcnow())
     )
     return task_full(ctx.db, t)
 
@@ -276,15 +306,20 @@ def pause(ctx: Context, task_id: uuid.UUID) -> S.TaskOut:
 def resume(ctx: Context, task_id: uuid.UUID) -> S.TaskOut:
     t = get_task(ctx, task_id, lock=True)
     require_action(TaskStatus(t.status), "resume")
-    # No execution engine: the task goes back to the queue instead of pretending to run.
-    transition(
-        ctx,
-        t,
-        TaskStatus.queued,
-        f"Resumed by {ctx.user.name} — waiting for the execution engine",
-        WaitingFor.execution_engine,
-    )
+    transition(ctx, t, TaskStatus.queued, f"Resumed by {ctx.user.name}", WaitingFor.execution_engine)
+    _dispatch(ctx, t, "task.execute")
     return task_full(ctx.db, t)
+
+
+def _dispatch(ctx: Context, t: Task, kind: str, payload: dict[str, str] | None = None) -> None:
+    Q.enqueue(
+        ctx.db,
+        workspace_id=t.workspace_id,
+        kind=kind,
+        queue=JobQueue.orchestrator,
+        task_id=t.id,
+        payload=payload or {},
+    )
 
 
 def message(ctx: Context, task_id: uuid.UUID, text: str, kind: str) -> S.TaskOut:
@@ -300,22 +335,21 @@ def message(ctx: Context, task_id: uuid.UUID, text: str, kind: str) -> S.TaskOut
     )
     if kind == "answer":
         require_action(status, "answer", has_plan)
+        if t.waiting_for == WaitingFor.approval.value:
+            raise ApiError(
+                409,
+                "waiting_for_approval",
+                "This task is waiting for an approval decision, not an answer. Decide it on the Approvals page.",
+            )
         add_event(ctx, t, "task.message", f"Your answer: {text}", "note")
         t.question = None
-        transition(
-            ctx, t, TaskStatus.queued, "Answer received — waiting for the execution engine", WaitingFor.execution_engine
-        )
+        transition(ctx, t, TaskStatus.queued, "Answer received — continuing", WaitingFor.execution_engine)
+        _dispatch(ctx, t, "task.execute")
     elif kind == "plan_change":
         require_action(status, "revise_plan", has_plan)
         add_event(ctx, t, "task.message", f"Plan change requested: {text}", "note")
-        # The planner would revise the plan; without it, the request is recorded and the task waits.
-        transition(
-            ctx,
-            t,
-            TaskStatus.queued,
-            "Plan change requested — waiting for the planning service",
-            WaitingFor.planning_service,
-        )
+        transition(ctx, t, TaskStatus.queued, "Plan change requested — re-planning", WaitingFor.planning_service)
+        _dispatch(ctx, t, "task.plan", {"feedback": text[:2000]})
     else:
         if status in (TaskStatus.completed, TaskStatus.cancelled, TaskStatus.failed, TaskStatus.partially_completed):
             raise ApiError(409, "action_not_allowed", "This task is finished, so questions can't be added.")
@@ -335,12 +369,19 @@ def message(ctx: Context, task_id: uuid.UUID, text: str, kind: str) -> S.TaskOut
 def approve_plan(ctx: Context, task_id: uuid.UUID, selected: list[uuid.UUID]) -> S.TaskOut:
     t = get_task(ctx, task_id, lock=True)
     steps = (
-        ctx.db.execute(select(TaskStep).where(TaskStep.workspace_id == ctx.workspace.id, TaskStep.task_id == t.id))
+        ctx.db.execute(
+            select(TaskStep).where(
+                TaskStep.workspace_id == ctx.workspace.id,
+                TaskStep.task_id == t.id,
+                TaskStep.plan_version == max(t.plan_version, 1),
+            )
+        )
         .scalars()
         .all()
     )
     require_action(TaskStatus(t.status), "approve_plan", has_plan=bool(steps))
-    ids = {s.id for s in steps}
+    # Steps the policy engine blocked can't be selected.
+    ids = {s.id for s in steps if s.state != "blocked"}
     sel = set(selected)
     if not sel or not sel <= ids:
         raise ApiError(
@@ -350,6 +391,8 @@ def approve_plan(ctx: Context, task_id: uuid.UUID, selected: list[uuid.UUID]) ->
             details=[{"field": "selected_step_ids", "message": "Select steps from this plan."}],
         )
     for s in steps:
+        if s.state == "blocked":
+            continue
         s.selected = s.id in sel
         if not s.selected:
             s.state = "skipped"
@@ -361,16 +404,8 @@ def approve_plan(ctx: Context, task_id: uuid.UUID, selected: list[uuid.UUID]) ->
         target_id=str(t.id),
         task_id=t.id,
     )
-    transition(
-        ctx, t, TaskStatus.queued, "Plan approved — waiting for the execution engine", WaitingFor.execution_engine
-    )
-    OutboxJobQueue(ctx.db).enqueue(
-        workspace_id=ctx.workspace.id,
-        kind="task.execute",
-        task_id=t.id,
-        payload={"steps": [str(i) for i in sel]},
-        dedupe_key=f"exec:{t.id}",
-    )
+    transition(ctx, t, TaskStatus.queued, "Plan approved — queued for execution", WaitingFor.execution_engine)
+    _dispatch(ctx, t, "task.execute")
     return task_full(ctx.db, t)
 
 

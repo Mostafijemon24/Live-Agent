@@ -1,0 +1,30 @@
+[
+  {
+    "stage": "soak:20vu",
+    "vus": 20,
+    "seconds": 600,
+    "requests": 19365,
+    "rps": 32.3,
+    "read_p50_ms": 15.6,
+    "read_p95_ms": 33.4,
+    "read_p99_ms": 52.5,
+    "write_p95_ms": 52.1,
+    "error_rate": 0.0,
+    "throttled_429_503": 0,
+    "codes": {
+      "200": 17403,
+      "201": 1962
+    },
+    "p95_by_endpoint_ms": {
+      "agent_status": 23.7,
+      "approvals": 28.4,
+      "create_task": 52.1,
+      "dashboard": 44.8,
+      "files": 25.7,
+      "notifications": 29.6,
+      "task_detail": 28.6,
+      "task_list": 25.4
+    },
+    "slo": "PASS"
+  }
+]

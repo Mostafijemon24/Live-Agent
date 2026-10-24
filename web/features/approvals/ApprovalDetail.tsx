@@ -3,7 +3,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { Approval } from "@/lib/api";
-import { APPROVAL_CATEGORY, APPROVAL_STATUS, RISK_LEVEL, TONE } from "@/lib/labels";
+import { APPROVAL_CATEGORY, APPROVAL_STATUS, EXECUTION_STATE, RISK_LEVEL, TONE } from "@/lib/labels";
 import { fmtDateTime, fmtExpires } from "@/lib/format";
 import { Badge, Button, Icon } from "@/components/ui";
 import type { DecisionKind } from "./DecisionModal";
@@ -83,6 +83,25 @@ export function ApprovalDetail({ ap, onDecide }: { ap: Approval; onDecide: (k: D
             {risk.label} risk
           </span>
         </Row>
+        {ap.operation && (
+          <Row k="Exact action">
+            <span className="font-mono text-[12.5px]">{ap.operation}</span>
+            {ap.targets && ap.targets.length > 0 && (
+              <span className="text-muted">
+                {" "}
+                → <span className="font-mono text-[12.5px] [overflow-wrap:anywhere]">{ap.targets.join(", ")}</span>
+              </span>
+            )}
+            <div className="mt-0.5 text-[12.5px] text-muted">
+              One-time approval, bound to this exact action{ap.policy_version ? ` and policy version ${ap.policy_version}` : ""}. If anything changes before it runs, it needs a new approval.
+            </div>
+            {ap.step_id && ap.task_id && (
+              <Link href={`/tasks/${ap.task_id}?tab=plan`} className="mt-0.5 inline-block text-[12.5px] font-medium">
+                See the plan step
+              </Link>
+            )}
+          </Row>
+        )}
         <Row k="Expires">{pending ? fmtExpires(ap.expires_at) : ap.expires_at ? fmtDateTime(ap.expires_at) : "—"}</Row>
         <Row k="Requested">
           {fmtDateTime(ap.requested_at)}
@@ -114,10 +133,11 @@ export function ApprovalDetail({ ap, onDecide }: { ap: Approval; onDecide: (k: D
           <Badge meta={status} />
           <span className="text-[13px] text-muted">{ap.decided_at ? `Decided · ${fmtDateTime(ap.decided_at)}` : status.label}</span>
           {ap.decision_note && <span className="basis-full text-[13px] text-ink-2">Note: {ap.decision_note}</span>}
-          {ap.execution_state === "blocked_until_phase3" && (
-            <span className="flex basis-full items-start gap-1.5 text-[12.5px] text-muted">
-              <Icon name="info" size={14} className="mt-0.5 text-primary" />
-              Execution blocked until the execution engine and policy checks are installed (Phase 3).
+          {ap.status === "approved" && ap.execution_state !== "not_executed" && (
+            <span className="flex basis-full items-center gap-1.5 text-[12.5px] text-muted">
+              <Badge meta={EXECUTION_STATE[ap.execution_state]} />
+              {ap.execution_state === "invalidated" && "The action or policy changed after approval, so it was not run with this approval."}
+              {ap.execution_state === "pending_execution" && "It runs once after a final check."}
             </span>
           )}
         </div>

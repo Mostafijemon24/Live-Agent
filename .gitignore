@@ -2,3 +2,6 @@
 .env.*
 !.env.example
 backups/
+
+# load-test session cookies (never commit)
+perf/.sessions.json

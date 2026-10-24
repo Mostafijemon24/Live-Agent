@@ -13,7 +13,7 @@ const TRIGGER_LABEL: Record<Automation["trigger"], string> = { manual: "Manual",
 const TRIGGER_ICON: Record<Automation["trigger"], string> = { manual: "hand", schedule: "calendar-clock", event: "zap" };
 
 const SCHEDULER_BODY =
-  "Scheduled automations stay paused until the backend scheduler (with a job queue, back-pressure and duplicate-run protection) is set up. Your settings are saved.";
+  "This server can't schedule automations right now. Your settings are saved; you can still run the automation by hand.";
 
 export function AutomationsScreen() {
   const { toast, notice } = useUi();
@@ -49,7 +49,7 @@ export function AutomationsScreen() {
       toast(
         DEMO_MODE
           ? `Queued ${task.ref} (simulated). It will not run without a backend.`
-          : `Queued ${task.ref}. It will not run until the execution engine is installed (Phase 3).`,
+          : `Queued ${task.ref}. You’ll review its plan before anything runs.`,
         "success",
       );
     },
@@ -70,9 +70,13 @@ export function AutomationsScreen() {
         }
       />
 
-      <div className="flex gap-2 rounded-[10px] border border-warning-line bg-warning-soft px-3.5 py-2.5 text-[13px] text-[#93370D]">
-        <Icon name="server" size={15} className="mt-0.5" />
-        <span>Scheduler: backend required. Scheduled automations stay paused until a job queue and scheduler are connected.</span>
+      <div className="flex gap-2 rounded-[10px] border border-line bg-surface px-3.5 py-2.5 text-[13px] text-ink-3">
+        <Icon name="calendar-clock" size={15} className="mt-0.5 text-primary" />
+        <span>
+          {DEMO_MODE
+            ? "Demo: schedules are not run in this prototype."
+            : "Scheduled automations create a task at each scheduled time (at most once per slot). The task’s plan waits for your review — nothing runs on its own."}
+        </span>
       </div>
 
       {list.isLoading ? (
@@ -174,7 +178,7 @@ export function AutomationsScreen() {
               Last run: {history.last_run_text}.{" "}
               {DEMO_MODE
                 ? "Run history with outcomes and links to each task appears once the scheduler and job queue are connected."
-                : "Run history with outcomes and links to each task appears once the scheduler and execution engine are installed (Phase 3)."}
+                : "Each run creates a task in Tasks. Its plan waits for your review — scheduled runs never execute on their own."}
             </div>
           </div>
         </Modal>
