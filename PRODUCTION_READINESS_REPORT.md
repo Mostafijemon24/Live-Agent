@@ -125,7 +125,7 @@ line-by-line ASVS assessment was **not** performed.
 | Secret scan | `detect-secrets scan` (tracked files) vs `.secrets.baseline` | Only reviewed placeholders and fixtures |
 | Browser e2e (real backend) | `WEB_URL=http://localhost:3100 node e2e/smoke.mjs` | **25/25 PASS**, 0 console errors |
 | Agent e2e flow | `e2e/agent-flow.mjs` | Not re-run this phase (passed in Phase 3; engine code unchanged except the worker config role) |
-| CI workflow | `actionlint .github/workflows/ci.yml` | Passed. **Never run on GitHub yet.** |
+| CI workflow | `actionlint`; GitHub Actions run 40116735033 | Passed: all 4 jobs green (API incl. tests on a fresh Postgres, migrations and audits; web; secret scan; both images built). The first run (40116494311) failed in the secret-scan job because of my workflow scanning `.git/`; fixed. |
 | Compose | `docker compose --env-file .env.example config -q` | Passed |
 
 ## 6. Performance (summary; full detail in `docs/PERFORMANCE.md`)
@@ -204,7 +204,6 @@ hardening and `no-store` for pages; backup/restore tooling; CI workflow; docs.
 - Audit log can be altered by the schema owner (trigger can be disabled); no hash chain.
 - `'unsafe-inline'` scripts in the web CSP.
 - Model provider behaviour (latency, cost, outages, data handling) is untested with a real provider.
-- The CI workflow has not run on GitHub yet; the first run may surface environment differences.
 
 ## 11. Manual actions required before public production (blockers)
 
@@ -213,7 +212,7 @@ hardening and `no-store` for pages; backup/restore tooling; CI workflow; docs.
 3. Verify SMTP: verification and password-reset e-mails arrive.
 4. Configure and test the chosen model provider (or keep `none`); review its data-processing terms.
 5. Schedule backups, copy them off-site, and run `restore.sh verify` successfully on the server.
-6. Push the branch, run CI on GitHub, and fix anything it finds.
+6. Keep CI green; protect the release branch so merges require it.
 7. Decide on the queue SLO: add orchestrator replicas, or accept a longer wait and document it.
 8. Wire at least the "site down", "worker missing", "backup" and "not ready" alerts to a person.
 
