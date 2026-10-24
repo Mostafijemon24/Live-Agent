@@ -28,11 +28,11 @@ def test_create_task_is_persisted_and_waits_for_planner(make_user: Any, owner_en
     # Timeline explains why nothing is happening.
     events = api.get(f"/tasks/{t['id']}/events").json()["items"]
     assert [e["kind"] for e in events] == ["task.created", "task.waiting"]
-    assert "not installed" in events[1]["message"]
-    # Background-job contract: recorded in the outbox, never dispatched.
+    assert "No approved AI model is configured" in events[1]["message"]
+    # A planning job is queued durably for the orchestrator.
     with owner_engine.connect() as c:
-        job = c.execute(text("SELECT kind, status FROM jobs WHERE task_id = :t"), {"t": t["id"]}).one()
-    assert tuple(job) == ("task.plan", "pending")
+        job = c.execute(text("SELECT kind, queue, status FROM jobs WHERE task_id = :t"), {"t": t["id"]}).one()
+    assert tuple(job) == ("task.plan", "orchestrator", "pending")
     assert create_task(api)["ref"] == "T-1002"
 
 
@@ -40,7 +40,7 @@ def test_create_task_validation(make_user: Any) -> None:
     api = make_user()
     cases = [
         ({"prompt": "too short", "type": "research"}, "prompt"),
-        ({"prompt": "Run all approved steps right now", "type": "research", "mode": "execute"}, "mode"),
+        ({"prompt": "Run all approved steps right now", "type": "research", "mode": "autopilot"}, "mode"),
         ({"prompt": "Valid prompt text here", "type": "nonsense"}, "type"),
         ({"prompt": "x" * 4001, "type": "research"}, "prompt"),
         ({"prompt": "Valid prompt text here", "type": "research", "priority": "urgent"}, "priority"),
@@ -81,8 +81,8 @@ def test_cancel_and_invalid_actions(make_user: Any) -> None:
     assert "task.status_changed" in acts and "task.created" in acts
 
 
-def test_plan_approval_flow_without_execution_engine(make_user: Any, owner_engine: Any) -> None:
-    """Simulates what the Phase 3 planner will write, then checks the API never fakes execution."""
+def test_plan_approval_queues_execution_and_never_fakes_progress(make_user: Any, owner_engine: Any) -> None:
+    """Steps written directly (as a planner would), then the API only queues execution."""
     api = make_user()
     t = create_task(api)
     with owner_engine.begin() as c:
@@ -108,9 +108,16 @@ def test_plan_approval_flow_without_execution_engine(make_user: Any, owner_engin
     r = api.post(f"/tasks/{t['id']}/plan/approve", {"selected_step_ids": [steps[0]["id"]]})
     assert r.status_code == 200
     out = r.json()
-    # Approved, but honestly waiting — not "running" or "completed".
+    # Approved and queued for the orchestrator — not "running" or "completed" until a worker runs it.
     assert out["status"] == "queued" and out["waiting_for"] == "execution_engine"
     assert [s["state"] for s in out["plan"]["steps"]] == ["not_started", "skipped"]
+    with owner_engine.connect() as c:
+        kinds = (
+            c.execute(text("SELECT kind FROM jobs WHERE task_id = :t ORDER BY created_at"), {"t": t["id"]})
+            .scalars()
+            .all()
+        )
+    assert kinds == ["task.plan", "task.execute"]
 
 
 def test_reject_plan_cancels(make_user: Any, owner_engine: Any) -> None:

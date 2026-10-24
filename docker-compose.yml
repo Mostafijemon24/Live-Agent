@@ -1,7 +1,9 @@
 # Steward — development and single-VPS deployment.
 #   docker compose up -d --build                 # app on http://localhost:3000
 #   docker compose --profile tls up -d --build   # + Caddy with automatic HTTPS for $DOMAIN
-# Only the web app (or Caddy) publishes a port. PostgreSQL and the API stay on the private network.
+# Only the web app (or Caddy) publishes a port. PostgreSQL, the API and the workers stay on an
+# internal network with no route to the internet. Only the orchestrator (model calls) and the tools
+# worker (allowlisted web reads) are also attached to the "egress" network.
 name: steward
 
 x-api-env: &api-env
@@ -20,6 +22,35 @@ x-api-env: &api-env
   SMTP_PORT: ${SMTP_PORT:-587}
   SMTP_USERNAME: ${SMTP_USERNAME:-}
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  DELETION_RETENTION_DAYS: ${DELETION_RETENTION_DAYS:-30}
+
+# Model provider: read by the API (to describe it) and the orchestrator/tools workers (to call it).
+# The key never reaches the browser, the model, logs or task output.
+x-model-env: &model-env
+  MODEL_PROVIDER: ${MODEL_PROVIDER:-none}
+  MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+  MODEL_NAME: ${MODEL_NAME:-}
+  MODEL_API_KEY: ${MODEL_API_KEY:-}
+  MODEL_LOCATION: ${MODEL_LOCATION:-external}
+  MODEL_PROVIDER_LABEL: ${MODEL_PROVIDER_LABEL:-}
+  MONTHLY_MODEL_TOKEN_QUOTA: ${MONTHLY_MODEL_TOKEN_QUOTA:-2000000}
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: ["/tmp"]
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+
+x-worker-env: &worker-env
+  ENV: ${APP_ENV}
+  APPROVAL_SIGNING_KEY: ${APPROVAL_SIGNING_KEY}
+  APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+  STORAGE_DIR: /data/storage
+  MAIL_BACKEND: disabled
+  DELETION_RETENTION_DAYS: ${DELETION_RETENTION_DAYS:-30}
+  # Workers connect only with their own least-privileged role (DATABASE_URL is set to the same role).
+  WORKER_DATABASE_URL: postgresql+psycopg://steward_worker:${STEWARD_WORKER_PASSWORD:?set STEWARD_WORKER_PASSWORD}@db:5432/steward
+  DATABASE_URL: postgresql+psycopg://steward_worker:${STEWARD_WORKER_PASSWORD}@db:5432/steward
 
 services:
   db:
@@ -30,6 +61,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD}
       STEWARD_OWNER_PASSWORD: ${STEWARD_OWNER_PASSWORD:?set STEWARD_OWNER_PASSWORD}
       STEWARD_APP_PASSWORD: ${STEWARD_APP_PASSWORD:?set STEWARD_APP_PASSWORD}
+      STEWARD_WORKER_PASSWORD: ${STEWARD_WORKER_PASSWORD:?set STEWARD_WORKER_PASSWORD}
+      STEWARD_DELETER_PASSWORD: ${STEWARD_DELETER_PASSWORD:?set STEWARD_DELETER_PASSWORD}
+      STEWARD_READONLY_PASSWORD: ${STEWARD_READONLY_PASSWORD:?set STEWARD_READONLY_PASSWORD}
+    networks: [backend]
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./deploy/db/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
@@ -46,6 +81,7 @@ services:
     environment:
       <<: *api-env
       MIGRATION_DATABASE_URL: postgresql+psycopg://steward_owner:${STEWARD_OWNER_PASSWORD}@db:5432/steward
+    networks: [backend]
     depends_on:
       db:
         condition: service_healthy
@@ -54,9 +90,75 @@ services:
   api:
     build: ./api
     restart: unless-stopped
-    environment: *api-env
+    environment:
+      <<: [*api-env, *model-env]
+      MODEL_API_KEY: ""  # the API only describes the provider; it never calls it
+    <<: *hardening
+    networks: [backend]
     volumes:
       - storage:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # ---- agent engine workers (same image, separate processes and database roles)
+  orchestrator:
+    build: ./api
+    command: ["python", "-m", "app.workers", "orchestrator"]
+    restart: unless-stopped
+    environment:
+      <<: [*worker-env, *model-env]
+    <<: *hardening
+    networks: [backend, egress]  # egress only for the configured model endpoint
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  tools:
+    build: ./api
+    command: ["python", "-m", "app.workers", "tools"]
+    restart: unless-stopped
+    environment:
+      <<: [*worker-env, *model-env]
+      # Code execution needs Linux user namespaces, which Docker's default seccomp profile blocks.
+      # It then reports itself unavailable and code steps are blocked (fails closed). Do not
+      # disable seccomp to enable it; use gVisor (runtime: runsc) or a dedicated sandbox host.
+      SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
+    <<: *hardening
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+    networks: [backend, egress]  # allowlisted web reads (checked again by the egress client)
+    volumes:
+      - storage:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  deletion:
+    build: ./api
+    command: ["python", "-m", "app.workers", "deletion"]
+    restart: unless-stopped
+    environment:
+      <<: *worker-env
+      DELETION_DATABASE_URL: postgresql+psycopg://steward_deleter:${STEWARD_DELETER_PASSWORD}@db:5432/steward
+      DATABASE_URL: postgresql+psycopg://steward_deleter:${STEWARD_DELETER_PASSWORD}@db:5432/steward
+      WORKER_DATABASE_URL: ""
+    <<: *hardening
+    networks: [backend]  # no internet
+    volumes:
+      - storage:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    build: ./api
+    command: ["python", "-m", "app.workers", "scheduler"]
+    restart: unless-stopped
+    environment: *worker-env
+    <<: *hardening
+    networks: [backend]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -68,6 +170,7 @@ services:
         API_INTERNAL_URL: http://api:8000
         NEXT_PUBLIC_DEMO_MODE: "false"
     restart: unless-stopped
+    networks: [backend, edge]
     depends_on:
       api:
         condition: service_healthy
@@ -83,11 +186,18 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    networks: [edge]
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
     depends_on:
       - web
+
+networks:
+  backend:
+    internal: true  # no route to the internet
+  edge: {}
+  egress: {}
 
 volumes:
   db-data:

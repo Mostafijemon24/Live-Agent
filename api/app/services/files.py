@@ -35,12 +35,16 @@ def limits() -> S.UploadLimitsOut:
     )
 
 
-def get_file(ctx: Context, file_id: uuid.UUID) -> FileRecord:
+def get_file(ctx: Context, file_id: uuid.UUID, include_deleted: bool = False) -> FileRecord:
     f = ctx.db.execute(
         select(FileRecord).where(FileRecord.workspace_id == ctx.workspace.id, FileRecord.id == file_id)
     ).scalar_one_or_none()
     if f is None:
         raise ctx.deny("file", file_id, "file")
+    if f.deleted_at is not None and not include_deleted:
+        raise ApiError(
+            410, "file_deleted", "This file was deleted. An owner or admin can restore it from Recently deleted."
+        )
     return f
 
 
@@ -120,8 +124,13 @@ def list_files(
     status: str | None,
     page: int,
     page_size: int,
+    deleted: bool = False,
 ) -> S.FilePage:
     conds = [FileRecord.workspace_id == ctx.workspace.id]
+    if deleted:  # "Recently deleted": restorable files only
+        conds += [FileRecord.deleted_at.is_not(None), FileRecord.purge_after.is_not(None)]
+    else:
+        conds.append(FileRecord.deleted_at.is_(None))
     if q:
         like = f"%{q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')}%"
         conds.append(FileRecord.original_name.ilike(like, escape="\\"))
@@ -144,7 +153,7 @@ def list_files(
     counts: dict[str, int] = dict(
         ctx.db.execute(
             select(FileRecord.collection, func.count())
-            .where(FileRecord.workspace_id == ctx.workspace.id)
+            .where(FileRecord.workspace_id == ctx.workspace.id, FileRecord.deleted_at.is_(None))
             .group_by(FileRecord.collection)
         )
         .tuples()
@@ -201,3 +210,17 @@ def download(ctx: Context, file_id: uuid.UUID) -> tuple[FileRecord, Iterator[byt
         raise ApiError(410, "file_unavailable", "The stored copy of this file is unavailable.")
     ctx.log("file.downloaded", "file", f"{f.original_name} downloaded", target_type="file", target_id=str(f.id))
     return f, storage().open(f.storage_key)
+
+
+def artifact_download(ctx: Context, artifact_id: uuid.UUID) -> tuple[str, Iterator[bytes]]:
+    from app.models import Artifact
+
+    a = ctx.db.execute(
+        select(Artifact).where(Artifact.workspace_id == ctx.workspace.id, Artifact.id == artifact_id)
+    ).scalar_one_or_none()
+    if a is None or not a.storage_key:
+        raise ctx.deny("artifact", artifact_id, "report")
+    if not storage().exists(a.storage_key):
+        raise ApiError(410, "file_unavailable", "The stored copy of this report is unavailable.")
+    ctx.log("artifact.downloaded", "file", f"{a.name} downloaded", target_type="artifact", target_id=str(a.id))
+    return a.name, storage().open(a.storage_key)

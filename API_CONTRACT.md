@@ -65,15 +65,17 @@ viewer = read-only (plus own preferences, onboarding, notifications). member = a
 
 | Endpoint | Body / query → Response | Notes |
 |---|---|---|
-| `GET /dashboard` | → `Dashboard` | Counts, agent status (`not_connected`), setup checklist, recent tasks/approvals/activity, unread count. |
+| `GET /agent/status` | → `AgentStatus` | Model provider (label, model, `local`/`external`, what it receives), worker liveness (orchestrator, tools, deletion, scheduler), this workspace's queue depth, policy version. |
+| `GET /agent/tools` | → `AgentTool[]` | The fixed tool registry with availability for this workspace (tool switches, sandbox, model). Unbuilt tools are listed with `available=false`. |
+| `GET /dashboard` | → `Dashboard` | Counts, agent status (same as `/agent/status`), setup checklist, recent tasks/approvals/activity, unread count. |
 | `GET /tasks` | `?q&status&type&created=today\|3d&integration=<key>\|none&sort=updated\|created\|title&page&page_size≤100` → `Page<TaskSummary>` | `q` matches title, prompt or `T-<n>`. |
-| `POST /tasks` | `CreateTaskInput` → `201 Task` | `mode=execute` is refused (engine not installed). Attachments must be your own ready/unscanned files. New tasks are `queued` with `waiting_for="planning_service"` and a `task.plan` job recorded in the outbox. |
-| `GET /tasks/{task_id}` | → `Task` | Includes `plan` (null until a planner exists), `allowed_actions` from the state machine. |
-| `POST /tasks/{task_id}/cancel` | `{reason?}` → `Task` | Allowed from any non-terminal status. |
+| `POST /tasks` | `CreateTaskInput` → `201 Task` | Attachments must be your own ready/unscanned, non-deleted files. `integration_key` must be a connected integration. New tasks are `queued` (`waiting_for="planning_service"`) with a durable `task.plan` job. With no model configured the task waits and nothing is sent anywhere. A plan always needs approval before anything runs, in every mode; `prepare` mode never applies changes. `503 queue_full` under backpressure. |
+| `GET /tasks/{task_id}` | → `Task` | `plan` (current version) with per-step `policy` decision, `impact`, `classifications`, `destinations`, `output_summary`/`output`, `error`; `artifacts`; `allowed_actions` from the state machine. |
+| `POST /tasks/{task_id}/cancel` | `{reason?}` → `Task` | Allowed from any non-terminal status. Pending jobs are cancelled, pending approvals of the task expire, a running tool's result is discarded. |
 | `POST /tasks/{task_id}/pause` | → `Task` | Only from `running`. |
-| `POST /tasks/{task_id}/resume` | → `Task` | From `paused` → `queued` (`waiting_for=execution_engine`). |
-| `POST /tasks/{task_id}/messages` | `{text, kind: question\|answer\|plan_change}` → `Task` | `answer` only in `needs_input`; `plan_change` only in `awaiting_approval` with a plan. |
-| `POST /tasks/{task_id}/plan/approve` | `{selected_step_ids[]}` → `Task` | Unselected steps become `skipped`; task → `queued` waiting for the execution engine. Never "running". |
+| `POST /tasks/{task_id}/resume` | → `Task` | From `paused` → `queued`; execution continues with the next step. |
+| `POST /tasks/{task_id}/messages` | `{text, kind: question\|answer\|plan_change}` → `Task` | `answer` only in `needs_input`; `plan_change` only in `awaiting_approval` with a plan — it re-plans with the text as feedback (new plan version). |
+| `POST /tasks/{task_id}/plan/approve` | `{selected_step_ids[]}` → `Task` | Owner/admin. Steps blocked by policy can't be selected; unselected steps become `skipped`; task → `queued` and a `task.execute` job is queued. Steps that need approval still ask one by one when reached. |
 | `POST /tasks/{task_id}/plan/reject` | `{note?}` → `Task` | → `cancelled`. |
 | `GET /tasks/{task_id}/events` | `?page&page_size≤200` → `Page<TaskEvent>` | Oldest first. |
 
@@ -85,43 +87,46 @@ Task state machine: `api/app/domain/task_states.py` (tested for every pair). Onl
 |---|---|---|
 | `GET /approvals` | `?status=pending\|decided\|all&page&page_size` → `Page<Approval> + pending_count` | Overdue pending requests are marked `expired`. |
 | `GET /approvals/{approval_id}` | → `Approval` | |
-| `POST /approvals/{approval_id}/decision` | `{decision: approve\|reject\|request_changes, note?, acknowledged, confirmed_items?}` → `Approval` | Owner/admin only. `approve` needs `acknowledged=true`; for `record_deletion` also `confirmed_items` equal to `affected_items`. `request_changes` needs a note. One decision per request (`409` after). Bound to the stored `payload_hash`. Approval sets `execution_state="blocked_until_phase3"` — nothing runs. |
+| `POST /approvals/{approval_id}/decision` | `{decision: approve\|reject\|request_changes, note?, acknowledged, confirmed_items?}` → `Approval` | Owner/admin only. `approve` needs `acknowledged=true`; for `record_deletion` also `confirmed_items` equal to `affected_items`. `request_changes` needs a note. One decision per request (`409` after). The request is HMAC-signed over everything shown plus `operation`, `args_hash`, `targets`, `step_id`, expiry and `policy_version`. Approving sets `execution_state="pending_execution"` and queues the job; the worker re-verifies the binding and the approver's role right before running, uses it once (`executed`), or marks it `invalidated` if anything changed. Declining a step skips it; declining a planning transfer cancels the task. |
 
 ### Files
 
 | Endpoint | Body / query → Response | Notes |
 |---|---|---|
 | `GET /files/limits` | → `UploadLimits` | Max size and allowed types. |
-| `GET /files` | `?q&collection&classification&status&page&page_size≤200` → `Page<FileItem> + collections[{name,count}]` | Collection counts are workspace-wide. |
+| `GET /files` | `?q&collection&classification&status&deleted&page&page_size≤200` → `Page<FileItem> + collections[{name,count}]` | Deleted files are hidden; `deleted=true` lists restorable ("Recently deleted") files with `restorable_until`. |
 | `POST /files` | multipart `file`, `collection` → `201 FileItem` | Type detected from content (PDF, PNG, JPG, DOCX, XLSX, CSV, TXT, MD, JSON); executables, scripts, HTML/SVG and archives refused (`415`). Size limit while streaming (`413`). Stored privately under a random name. Status `unscanned` (scanner not configured), classification `unknown`. |
-| `GET /files/{file_id}` | → `FileItem` | |
+| `GET /files/{file_id}` | → `FileItem` | `410 file_deleted` for a deleted file. |
 | `PATCH /files/{file_id}` | `{classification?, collection?}` → `FileItem` | Classification changes are audited. |
 | `GET /files/{file_id}/download` | → bytes | `Content-Disposition: attachment`, `application/octet-stream`, `nosniff`, `CSP: sandbox`. Quarantined files refused. |
-| `POST /files/{file_id}/deletion-request` | `{reason}` → `201 Approval` | Creates a `deletion_requests` row + a `record_deletion` approval. Never deletes. |
+| `POST /files/{file_id}/deletion-request` | `{reason}` → `201 Approval` | Preview (file id, name, size, SHA-256) + `deletion_requests` row + one-time `record_deletion` approval bound to that exact content. The API never deletes: after approval the deletion service (own DB role) re-validates and soft-deletes. |
+| `POST /files/{file_id}/restore` | → `202 FileItem` | Owner/admin. Restores a deleted file during the retention window (queued to the deletion service). `410 retention_ended` after it. |
+| `GET /artifacts/{artifact_id}/download` | → bytes | A report produced by a task. Same download headers as files. |
 
 ### Automations, integrations
 
 | Endpoint | Body → Response | Notes |
 |---|---|---|
 | `GET /automations` | → `Automation[]` | |
-| `POST /automations` | `CreateAutomationInput` → `201 Automation` | Scheduled automations are saved disabled (DB constraint) until the scheduler exists. |
-| `PATCH /automations/{automation_id}` | `{enabled}` → `Automation` | Enabling a scheduled one → `409 scheduler_not_configured`. |
-| `POST /automations/{automation_id}/run` | → `201 Task` | Queues a task (waiting for the planner). |
-| `GET /integrations` | → `Integration[]` | Catalog with this workspace's status. `connectable=false` in Phase 2. |
-| `POST /integrations/{key}/connect` | → `409 integration_not_available` | Audited. Real OAuth/server flows are Phase 3. No credentials are ever collected. |
-| `POST /integrations/{key}/disconnect` | → `Integration` | Only for connected integrations. |
+| `POST /automations` | `CreateAutomationInput` → `201 Automation` | Enabled on creation; scheduled ones get `next_run_at`. Each run creates a task whose plan still needs approval. |
+| `PATCH /automations/{automation_id}` | `{enabled}` → `Automation` | Pausing clears the next run; enabling schedules it. The scheduler runs each slot at most once (row lock + per-slot idempotency key). |
+| `POST /automations/{automation_id}/run` | → `201 Task` | Creates a task and queues planning. |
+| `GET /integrations` | → `Integration[]` | Catalog with this workspace's status. `operational=true` only for real adapters (WordPress read-only; the AI provider configured by the administrator). Others are listed as not built. |
+| `POST /integrations/wordpress/connect` | `{site_url}` → `202 Integration` | Owner/admin. `https://` only; the domain must already be on the allowed list. No credentials. Stays `not_connected` until the tools worker verifies `/wp-json/` (then `connected` or `error` with a message). |
+| `POST /integrations/{key}/connect` | → `409 integration_not_available` | Audited. For integrations that are not built (and `ai_provider`, which is configured on the server). No credentials are ever collected. |
+| `POST /integrations/{key}/disconnect` | → `Integration` | Clears the stored site URL and scopes. |
 
 ### Reports, activity, notifications, security, settings
 
 | Endpoint | Response | Notes |
 |---|---|---|
-| `GET /reports` | `{artifacts[], reports: Task[]}` | Empty until the execution engine produces outputs. |
+| `GET /reports` | `{artifacts[], reports: Task[]}` | Reports written by `report.write` steps (`verified_result`) and finished tasks. |
 | `GET /activity` | `Page<ActivityEvent>` (`?type&page&page_size`) | Reads the workspace's audit log (newest first). |
 | `GET /notifications` | `{items, unread}` (`?unread=true`) | `target.route` is an app path. |
 | `POST /notifications/read-all` | `204` | |
 | `POST /notifications/{notification_id}/read` | `204` | |
-| `GET /security/status` | `SecurityStatus` | Checklist states are computed from configuration: `enforced`, `partial` or `not_configured`. `privacy_enforced=false`. |
-| `GET /settings` | `Settings` | `enforced=false` until the Phase 3 policy engine. |
+| `GET /security/status` | `SecurityStatus` | Checklist states are computed from configuration: `enforced`, `partial` or `not_configured`. `privacy_enforced=true` (policy engine). `ai_provider_policy` states what the configured model receives. |
+| `GET /settings` | `Settings` | `enforced=true`: privacy mode, tool switches and allowed domains are read by the policy engine before every step. AI rules can only make it stricter. |
 | `PATCH /workspace/settings` | `Settings` | Owner/admin only. `{name?, privacy_mode?, ai_rules?, tool_permissions?, allowed_domains?}`. |
 | `GET /usage` | `Usage` | Tasks/month, storage, uploads; quotas from config. |
 

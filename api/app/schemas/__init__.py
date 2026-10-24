@@ -158,6 +158,14 @@ class OnboardingIn(In):
 
 
 # ------------------------------------------------------------------ tasks
+class StepPolicyOut(Out):
+    outcome: Literal["allow", "require_approval", "deny"]
+    reasons: list[str]
+    data_leaves: bool
+    classification: str
+    version: str
+
+
 class TaskStepOut(Out):
     id: uuid.UUID
     position: int
@@ -170,12 +178,29 @@ class TaskStepOut(Out):
     selected: bool
     started_at: datetime | None
     finished_at: datetime | None
+    # Phase 3 (server-derived; optional so older clients keep working)
+    step_key: str = ""
+    tool_id: str | None = None
+    impact: str = "none"
+    classifications: list[str] = Field(default_factory=list)
+    destinations: list[str] = Field(default_factory=list)
+    policy: StepPolicyOut | None = None
+    output_summary: str | None = None
+    output: dict[str, Any] | None = None
+    error: str | None = None
+    approval_id: uuid.UUID | None = None
+    attempts: int = 0
+    artifact_id: uuid.UUID | None = None
 
 
 class TaskPlanOut(Out):
     steps: list[TaskStepOut]
     data_sources: list[str]
     destination: str | None
+    version: int = 1
+    summary: str | None = None
+    provider: str | None = None
+    provider_location: str | None = None
 
 
 class TaskReportOut(Out):
@@ -203,6 +228,15 @@ class TaskSummaryOut(Out):
     updated_at: datetime
 
 
+class TaskArtifactOut(Out):
+    id: uuid.UUID
+    name: str
+    kind: str
+    provenance: Literal["ai_generated", "verified_result"]
+    size_bytes: int
+    created_at: datetime
+
+
 class TaskOut(TaskSummaryOut):
     prompt: str
     question: str | None
@@ -211,6 +245,10 @@ class TaskOut(TaskSummaryOut):
     plan: TaskPlanOut | None
     report: TaskReportOut | None
     allowed_actions: list[str]
+    data_classification: FileClassification = FileClassification.confidential
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    artifacts: list[TaskArtifactOut] = Field(default_factory=list)
 
 
 class CreateTaskIn(In):
@@ -227,13 +265,6 @@ class CreateTaskIn(In):
     def _prompt(cls, v: str) -> str:
         if len(v.strip()) < 12:
             raise ValueError("Describe the task in a sentence or two so the Agent can plan it.")
-        return v
-
-    @field_validator("mode")
-    @classmethod
-    def _mode(cls, v: ExecutionMode) -> ExecutionMode:
-        if v == ExecutionMode.execute:
-            raise ValueError("Executing steps is not available until the execution engine is installed.")
         return v
 
 
@@ -299,6 +330,11 @@ class ApprovalOut(Out):
     decided_at: datetime | None
     decision_note: str | None
     execution_state: ExecutionState
+    # Phase 3 binding (shown to the approver)
+    operation: str | None = None
+    targets: list[str] = Field(default_factory=list)
+    policy_version: str | None = None
+    step_id: uuid.UUID | None = None
 
 
 class ApprovalPage(Page[ApprovalOut]):
@@ -326,6 +362,8 @@ class FileOut(Out):
     error_message: str | None
     scan_status: ScanStatus
     deletion_requested: bool
+    deleted_at: datetime | None = None
+    restorable_until: datetime | None = None  # deleted files can be restored until this time
 
 
 class CollectionCount(Out):
@@ -439,6 +477,34 @@ class IntegrationOut(Out):
     destination: str
     scopes: list[str]
     connectable: bool
+    operational: bool = False  # a real, tested adapter exists (not a mock)
+    mode: str | None = None
+    site_url: str | None = None
+    error_message: str | None = None
+
+
+class ConnectWordPressIn(In):
+    site_url: str = Field(min_length=10, max_length=300)
+
+    @field_validator("site_url")
+    @classmethod
+    def _site(cls, v: str) -> str:
+        from urllib.parse import urlsplit
+
+        v = v.strip().rstrip("/")
+        parts = urlsplit(v)
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError("Enter the site's https:// address, like https://example.com")
+        if not _DOMAIN.match(parts.hostname.lower()):
+            raise ValueError("Enter a public domain name.")
+        return f"https://{parts.hostname.lower()}{parts.path if parts.path not in ('', '/') else ''}"
 
 
 ActivityType = Literal[
@@ -473,11 +539,40 @@ class NotificationList(Out):
 
 
 # ------------------------------------------------------------------ dashboard, security, settings
+class ProviderOut(Out):
+    key: str
+    label: str
+    model: str
+    location: Literal["local", "external"]
+    configured: bool
+    data_disclosure: str
+
+
+class WorkerOut(Out):
+    kind: str
+    alive: bool
+    last_heartbeat: datetime | None
+
+
+class ToolOut(Out):
+    id: str
+    label: str
+    description: str
+    impact: str
+    risk: StepRisk
+    available: bool
+    unavailable_reason: str | None
+
+
 class AgentStatusOut(Out):
     status: Literal["not_configured", "not_connected", "ok", "degraded"]
     planner: Literal["not_configured", "not_connected", "ok", "degraded"]
     queue: Literal["not_configured", "not_connected", "ok", "degraded"]
     message: str
+    provider: ProviderOut | None = None
+    workers: list[WorkerOut] = Field(default_factory=list)
+    queue_depth: dict[str, int] = Field(default_factory=dict)
+    policy_version: str | None = None
 
 
 class DashboardCounts(Out):

@@ -95,6 +95,27 @@ class LocalPrivateFileStorage:
         target = self.root / ".quarantine" / key.replace("/", "_")
         os.replace(p, target)
 
+    # ---- soft deletion (used only by the deletion service)
+    def _trash_path(self, key: str) -> Path:
+        self._path(key)  # validates the key
+        trash = self.root / ".trash"
+        trash.mkdir(exist_ok=True, mode=0o700)
+        return trash / key.replace("/", "_")
+
+    def move_to_trash(self, key: str) -> None:
+        os.replace(self._path(key), self._trash_path(key))
+
+    def restore_from_trash(self, key: str) -> None:
+        dest = self._path(key)
+        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.replace(self._trash_path(key), dest)
+
+    def in_trash(self, key: str) -> bool:
+        return self._trash_path(key).is_file()
+
+    def purge_from_trash(self, key: str) -> None:
+        self._trash_path(key).unlink(missing_ok=True)
+
     def discard_incomplete(self, key: str) -> None:
         """Remove a just-written object whose database record failed to commit (never user data)."""
         p = self._path(key)

@@ -167,6 +167,12 @@ class Task(Base):
     plan_meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB)  # data_sources, destination (from planner)
     idempotency_key: Mapped[str | None] = mapped_column(String(80))
     automation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # Phase 3: the current plan version (0 = no plan yet) and the sensitivity of the task text itself.
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    data_classification: Mapped[str] = mapped_column(String(16), nullable=False, server_default="confidential")
+    plan_summary: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
@@ -184,6 +190,7 @@ class Task(Base):
         _check("type", E.TaskType),
         _check("priority", E.TaskPriority),
         _check("mode", E.ExecutionMode),
+        _check("data_classification", E.FileClassification),
         CheckConstraint(
             "waiting_for IS NULL OR waiting_for IN ('planning_service','execution_engine','user_input','approval')",
             name="waiting_for_valid",
@@ -209,11 +216,42 @@ class TaskStep(Base):
     selected: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # ---- Phase 3: validated, server-derived plan details (never trusted from the model)
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    step_key: Mapped[str] = mapped_column(String(16), nullable=False, server_default="")
+    tool_id: Mapped[str | None] = mapped_column(String(64))
+    args: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    args_hash: Mapped[str | None] = mapped_column(String(64))
+    permissions: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    classifications: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    destinations: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    impact: Mapped[str] = mapped_column(String(32), nullable=False, server_default="none")
+    policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    idempotent: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    expected_output: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="60")
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    output: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    error: Mapped[str | None] = mapped_column(Text)
+    approval_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     __table_args__ = (
         ForeignKeyConstraint(["workspace_id", "task_id"], ["tasks.workspace_id", "tasks.id"], ondelete="RESTRICT"),
-        UniqueConstraint("task_id", "position"),
+        ForeignKeyConstraint(
+            ["workspace_id", "approval_id"],
+            ["approval_requests.workspace_id", "approval_requests.id"],
+            name="fk_task_steps_workspace_approval",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("workspace_id", "id", name="uq_task_steps_workspace_id_id"),
+        UniqueConstraint("task_id", "plan_version", "position", name="uq_task_steps_task_version_position"),
         _check("risk", E.StepRisk),
         _check("state", E.StepState),
+        CheckConstraint(
+            "impact IN ('none','workspace_write','external_read','external_transfer','publish','send_message',"
+            "'production_change','sensitive_change','delete','permission_change')",
+            name="impact_valid",
+        ),
     )
 
 
@@ -264,8 +302,23 @@ class Job(Base):
     dedupe_key: Mapped[str | None] = mapped_column(String(120))
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     created_at: Mapped[datetime] = _created()
+    # ---- Phase 3: durable queue fields
+    queue: Mapped[str] = mapped_column(String(16), nullable=False, server_default="orchestrator")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="100")
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    locked_by: Mapped[str | None] = mapped_column(String(120))
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    step_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     __table_args__ = (
         UniqueConstraint("workspace_id", "dedupe_key", name="uq_jobs_workspace_dedupe"),
+        _check("status", E.JobStatus),
+        _check("queue", E.JobQueue),
+        CheckConstraint("attempts >= 0 AND max_attempts >= 1", name="attempts_valid"),
+        Index("ix_jobs_claim", "queue", "status", "run_after", "priority"),
         ForeignKeyConstraint(
             ["workspace_id", "task_id"],
             ["tasks.workspace_id", "tasks.id"],
@@ -302,6 +355,13 @@ class ApprovalRequest(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decision_note: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = _updated()
+    # ---- Phase 3: binding to the exact operation
+    step_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    operation: Mapped[str | None] = mapped_column(String(64))  # tool id or workflow name
+    args_hash: Mapped[str | None] = mapped_column(String(64))  # canonical hash of the validated arguments
+    targets: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    policy_version: Mapped[str | None] = mapped_column(String(32))
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     __table_args__ = (
         UniqueConstraint("workspace_id", "id", name="uq_approval_requests_workspace_id_id"),
         UniqueConstraint("workspace_id", "number", name="uq_approval_requests_workspace_number"),
@@ -348,6 +408,8 @@ class DeletionRequest(Base):
     requested_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     approval_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="pending_approval")
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    execution_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
     __table_args__ = (
@@ -371,7 +433,7 @@ class DeletionRequest(Base):
             "target_type",
             "target_id",
             unique=True,
-            postgresql_where=text("status IN ('pending_approval','approved_blocked')"),
+            postgresql_where=text("status IN ('pending_approval','approved_blocked','approved')"),
         ),
     )
 
@@ -395,6 +457,9 @@ class FileRecord(Base):
     uploaded_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
+    # Soft delete by the deletion service; the object moves to trash and is purged after retention.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint("workspace_id", "id", name="uq_files_workspace_id_id"),
         _check("status", E.FileStatus),
@@ -413,7 +478,9 @@ class IntegrationConnection(Base):
     key: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     granted_scopes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
-    # Credentials are never stored in Phase 2. Phase 3 adds an encrypted secret reference here.
+    # Non-secret connection settings only (e.g. a public site URL). No credentials are stored.
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    error_message: Mapped[str | None] = mapped_column(Text)
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
@@ -437,6 +504,7 @@ class Automation(Base):
     approval_policy: Mapped[str] = mapped_column(String(120), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
@@ -445,8 +513,7 @@ class Automation(Base):
         UniqueConstraint("workspace_id", "id", name="uq_automations_workspace_id_id"),
         CheckConstraint("trigger IN ('manual','schedule','event')", name="trigger_valid"),
         CheckConstraint("frequency IS NULL OR frequency IN ('daily','weekly','monthly')", name="frequency_valid"),
-        # The scheduler is not installed: a scheduled automation may never be enabled in Phase 2.
-        CheckConstraint("NOT (trigger = 'schedule' AND enabled)", name="schedule_disabled_until_scheduler"),
+        Index("ix_automations_due", "enabled", "next_run_at"),
     )
 
 
@@ -459,9 +526,19 @@ class Artifact(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     provenance: Mapped[str] = mapped_column(String(32), nullable=False)
     storage_key: Mapped[str | None] = mapped_column(String(200))
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False, server_default="text/markdown")
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    step_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = _created()
     __table_args__ = (
         ForeignKeyConstraint(["workspace_id", "task_id"], ["tasks.workspace_id", "tasks.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["workspace_id", "step_id"],
+            ["task_steps.workspace_id", "task_steps.id"],
+            name="fk_artifacts_workspace_step",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint("provenance IN ('ai_generated','verified_result')", name="provenance_valid"),
         Index("ix_artifacts_ws_created", "workspace_id", "created_at"),
     )
@@ -536,3 +613,55 @@ class AccountRequest(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="received")
     created_at: Mapped[datetime] = _created()
     __table_args__ = (CheckConstraint("kind IN ('data_export','account_deletion')", name="kind_valid"),)
+
+
+# ---------------------------------------------------------------- Phase 3: model usage and worker health
+class ModelCall(Base):
+    """One row per model request: provider, model, where it ran, usage and outcome — never the prompt."""
+
+    __tablename__ = "model_calls"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="RESTRICT"), nullable=False)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    location: Mapped[str] = mapped_column(String(16), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    outcome: Mapped[str] = mapped_column(String(24), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    redactions: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    created_at: Mapped[datetime] = _created()
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "task_id"],
+            ["tasks.workspace_id", "tasks.id"],
+            name="fk_model_calls_workspace_task",
+            ondelete="RESTRICT",
+        ),
+        _check("location", E.ModelLocation),
+        CheckConstraint(
+            "outcome IN ('ok','error','timeout','rate_limited','blocked','invalid_output','quota_exceeded')",
+            name="outcome_valid",
+        ),
+        Index("ix_model_calls_ws_created", "workspace_id", "created_at"),
+    )
+
+
+class WorkerHeartbeat(Base):
+    """Liveness of background processes (orchestrator, tool runner, deletion service, scheduler)."""
+
+    __tablename__ = "workers"
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    hostname: Mapped[str] = mapped_column(String(120), nullable=False)
+    pid: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    started_at: Mapped[datetime] = _created()
+    heartbeat_at: Mapped[datetime] = _created()
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    jobs_done: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    jobs_failed: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    __table_args__ = (CheckConstraint("kind IN ('orchestrator','tools','deletion','scheduler')", name="kind_valid"),)

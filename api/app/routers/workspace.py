@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
@@ -12,6 +13,7 @@ from app.core import ratelimit as RL
 from app.core.deps import Context, get_context, parse_uuid
 from app.core.errors import ApiError
 from app.domain.enums import FileClassification, FileStatus, TaskStatus, TaskType, WorkspaceRole
+from app.services import agent as AG
 from app.services import approvals as A
 from app.services import files as F
 from app.services import tasks as T
@@ -44,6 +46,16 @@ def _write_limit(ctx: Context) -> None:
 
 
 # ------------------------------------------------------------------ dashboard
+@router.get("/agent/status", response_model=S.AgentStatusOut)
+def agent_status(ctx: Ctx) -> S.AgentStatusOut:
+    return AG.agent_status(ctx)
+
+
+@router.get("/agent/tools", response_model=list[S.ToolOut])
+def agent_tools(ctx: Ctx) -> list[S.ToolOut]:
+    return AG.tools_out(ctx)
+
+
 @router.get("/dashboard", response_model=S.DashboardOut)
 def dashboard(ctx: Ctx) -> S.DashboardOut:
     return W.dashboard(ctx)
@@ -169,6 +181,7 @@ def list_files(
     status: FileStatus | None = None,
     page: PageQ = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    deleted: bool = False,
 ) -> S.FilePage:
     return F.list_files(
         ctx,
@@ -178,6 +191,7 @@ def list_files(
         status.value if status else None,
         page,
         page_size,
+        deleted,
     )
 
 
@@ -213,8 +227,12 @@ def patch_file(file_id: str, body: S.FilePatchIn, ctx: Admin) -> S.FileOut:
 def download_file(file_id: str, ctx: Ctx) -> StreamingResponse:
     f, chunks = F.download(ctx, parse_uuid(file_id, "file"))
     ctx.db.commit()  # persist the audit event before streaming
-    # Always an attachment with a generic type: the browser must never render uploaded content inline.
-    ascii_name = "".join(ch if 32 <= ord(ch) < 127 and ch not in '"\\' else "_" for ch in f.original_name)
+    return _attachment(f.original_name, chunks)
+
+
+def _attachment(name: str, chunks: Iterator[bytes]) -> StreamingResponse:
+    # Always an attachment with a generic type: the browser must never render stored content inline.
+    ascii_name = "".join(ch if 32 <= ord(ch) < 127 and ch not in '"\\' else "_" for ch in name)
     return StreamingResponse(
         chunks,
         media_type="application/octet-stream",
@@ -224,6 +242,19 @@ def download_file(file_id: str, ctx: Ctx) -> StreamingResponse:
             "Content-Security-Policy": "sandbox",
         },
     )
+
+
+@router.post("/files/{file_id}/restore", response_model=S.FileOut, status_code=202)
+def restore_file(file_id: str, ctx: Admin) -> S.FileOut:
+    _write_limit(ctx)
+    return AG.restore_file(ctx, parse_uuid(file_id, "file"))
+
+
+@router.get("/artifacts/{artifact_id}/download")
+def download_artifact(artifact_id: str, ctx: Ctx) -> StreamingResponse:
+    name, chunks = F.artifact_download(ctx, parse_uuid(artifact_id, "artifact"))
+    ctx.db.commit()
+    return _attachment(name, chunks)
 
 
 @router.post("/files/{file_id}/deletion-request", response_model=S.ApprovalOut, status_code=201)
@@ -261,6 +292,13 @@ def run_automation(automation_id: str, ctx: Admin) -> S.TaskOut:
 @router.get("/integrations", response_model=list[S.IntegrationOut])
 def list_integrations(ctx: Ctx) -> list[S.IntegrationOut]:
     return W.list_integrations(ctx)
+
+
+@router.post("/integrations/wordpress/connect", response_model=S.IntegrationOut, status_code=202)
+def connect_wordpress(body: S.ConnectWordPressIn, ctx: Admin) -> S.IntegrationOut:
+    _write_limit(ctx)
+    AG.connect_wordpress(ctx, body)
+    return next(i for i in W.list_integrations(ctx) if i.key == "wordpress")
 
 
 @router.post("/integrations/{key}/connect", response_model=S.IntegrationOut)

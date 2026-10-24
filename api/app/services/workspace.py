@@ -24,6 +24,7 @@ from app.models import (
     Task,
     Workspace,
 )
+from app.services.agent import agent_status
 from app.services.views import activity_out, approvals_out, task_full, task_ref, task_summary
 
 # ------------------------------------------------------------------ integrations catalog
@@ -88,6 +89,9 @@ CATALOG_KEYS = {str(c["key"]) for c in CATALOG}
 
 
 def list_integrations(ctx: Context) -> list[S.IntegrationOut]:
+    from app.engine.integrations import INTEGRATIONS
+    from app.engine.providers import get_provider
+
     rows = {
         r.key: r
         for r in ctx.db.execute(
@@ -97,20 +101,40 @@ def list_integrations(ctx: Context) -> list[S.IntegrationOut]:
     out = []
     for c in CATALOG:
         r = rows.get(str(c["key"]))
+        key = str(c["key"])
+        meta = INTEGRATIONS.get(key, {"operational": False, "mode": "not built"})
         default = IntegrationStatus.backend_required if c.get("backend_required") else IntegrationStatus.not_connected
         status = IntegrationStatus(r.status) if r else default
+        description = str(c["description"])
+        destination = str(c["destination"])
+        scopes = [str(x) for x in c["scopes"]]  # type: ignore[attr-defined]
+        if key == "ai_provider":
+            info = get_provider().info
+            status = IntegrationStatus.connected if info.configured else IntegrationStatus.not_connected
+            description = info.data_disclosure
+            destination = f"{info.label} ({info.location})" if info.configured else "None configured"
+        if key == "wordpress":
+            scopes = [
+                "Read published pages and posts (public REST API)",
+                "No credentials stored",
+                "No changes to your site",
+            ]
         last = "Never" if not r or not r.last_activity_at else r.last_activity_at.strftime("%b %d, %H:%M UTC")
         out.append(
             S.IntegrationOut(
-                key=str(c["key"]),
+                key=key,
                 name=str(c["name"]),
                 icon=str(c["icon"]),
                 status=status,
-                description=str(c["description"]),
+                description=description,
                 last_activity=last,
-                destination=str(c["destination"]),
-                scopes=[str(x) for x in c["scopes"]],  # type: ignore[attr-defined]
-                connectable=False,
+                destination=destination,
+                scopes=scopes,
+                connectable=key == "wordpress",
+                operational=bool(meta["operational"]),
+                mode=str(meta["mode"]),
+                site_url=str((r.config or {}).get("site_url")) if r and (r.config or {}).get("site_url") else None,
+                error_message=r.error_message if r else None,
             )
         )
     return out
@@ -120,19 +144,26 @@ def connect_integration(ctx: Context, key: str) -> S.IntegrationOut:
     if key not in CATALOG_KEYS:
         raise ApiError(404, "not_found", "That integration was not found.")
     ctx.require_role(WorkspaceRole.owner, WorkspaceRole.admin)
+    if key == "wordpress":
+        raise ApiError(422, "site_url_required", "Enter your site's address to connect WordPress (read-only).")
     ctx.log(
         "integration.connect_unavailable",
         "integration",
-        f"Connecting {key} was requested — not available until Phase 3",
+        f"Connecting {key} was requested — this integration is not built yet",
         target_type="integration",
         target_id=key,
     )
     ctx.db.commit()
+    if key == "ai_provider":
+        raise ApiError(
+            409,
+            "integration_not_available",
+            "The AI model provider is configured by the server administrator (environment variables), not from the browser. API keys are never entered here.",
+        )
     raise ApiError(
         409,
         "integration_not_available",
-        "Connecting needs the integration service, which arrives in Phase 3. "
-        "Connections will use a secure server-side sign-in with least-privilege scopes. This app never asks for passwords or API keys.",
+        "This integration is not built yet. WordPress (read-only) is the first available integration. This app never asks for passwords or API keys.",
     )
 
 
@@ -145,10 +176,12 @@ def disconnect_integration(ctx: Context, key: str) -> S.IntegrationOut:
         .where(IntegrationConnection.workspace_id == ctx.workspace.id, IntegrationConnection.key == key)
         .with_for_update()
     ).scalar_one_or_none()
-    if r is None or r.status not in (IntegrationStatus.connected.value, IntegrationStatus.demo.value):
+    if r is None or (r.status == IntegrationStatus.not_connected.value and not (r.config or {})):
         raise ApiError(409, "integration_not_connected", "That integration is not connected.")
     r.status = IntegrationStatus.not_connected.value
     r.granted_scopes = []
+    r.config = {}
+    r.error_message = None
     r.updated_at = utcnow()
     ctx.log("integration.disconnected", "integration", f"{key} disconnected", target_type="integration", target_id=key)
     return next(i for i in list_integrations(ctx) if i.key == key)
@@ -203,12 +236,7 @@ def dashboard(ctx: Context) -> S.DashboardOut:
         > 0
     )
     return S.DashboardOut(
-        agent=S.AgentStatusOut(
-            status="not_connected",
-            planner="not_configured",
-            queue="not_configured",
-            message="The AI agent engine (planner, workers and policy engine) is not installed yet. Tasks are saved and queued, but nothing is executed.",
-        ),
+        agent=agent_status(ctx),
         counts=S.DashboardCounts(
             in_progress=c(TaskStatus.queued, TaskStatus.planning, TaskStatus.running),
             awaiting_approval_plans=c(TaskStatus.awaiting_approval),
@@ -361,8 +389,12 @@ def _auto_out(a: Automation) -> S.AutomationOut:
         when = {"weekly": f"Every {a.day or 'Monday'} at {t}", "daily": f"Every day at {t}"}.get(
             a.frequency or "", f"1st of each month at {t}"
         )
-        nxt = "Not scheduled — the scheduler arrives in Phase 3"
-    last = a.last_run_at.strftime("%b %d, %H:%M UTC") + " (queued only)" if a.last_run_at else "Never run"
+        nxt = (
+            a.next_run_at.strftime("%b %d, %H:%M UTC") + " (creates a plan for review)"
+            if a.enabled and a.next_run_at
+            else "Paused"
+        )
+    last = a.last_run_at.strftime("%b %d, %H:%M UTC") if a.last_run_at else "Never run"
     return S.AutomationOut(
         id=a.id,
         ref=f"AU-{a.number}",
@@ -430,15 +462,18 @@ def create_automation(ctx: Context, body: S.CreateAutomationIn) -> S.AutomationO
         tools=body.tools,
         file_scope=body.file_scope,
         approval_policy=body.approval_policy,
-        enabled=body.trigger == "manual",
+        enabled=True,
         created_by=ctx.user.id,
     )
+    from app.engine.scheduler import next_run
+
+    a.next_run_at = next_run(a, utcnow())
     ctx.db.add(a)
     ctx.db.flush()
     ctx.log(
         "automation.created",
         "task",
-        f'Automation "{a.name}" created' + (" (paused — scheduler not installed)" if a.trigger == "schedule" else ""),
+        f'Automation "{a.name}" created',
         target_type="automation",
         target_id=str(a.id),
     )
@@ -446,14 +481,11 @@ def create_automation(ctx: Context, body: S.CreateAutomationIn) -> S.AutomationO
 
 
 def set_automation_enabled(ctx: Context, aid: uuid.UUID, enabled: bool) -> S.AutomationOut:
+    from app.engine.scheduler import next_run
+
     a = get_automation(ctx, aid)
-    if enabled and a.trigger == "schedule":
-        raise ApiError(
-            409,
-            "scheduler_not_configured",
-            "Scheduled automations stay paused until the scheduler (with a job queue, back-pressure and duplicate-run protection) is installed in Phase 3. Your settings are saved.",
-        )
     a.enabled = enabled
+    a.next_run_at = next_run(a, utcnow()) if enabled else None
     a.updated_at = utcnow()
     ctx.log(
         "automation.updated",
@@ -525,6 +557,10 @@ def security_status(ctx: Context) -> S.SecurityStatusOut:
         ).scalars()
     )
     cookie_ok = settings.cookie_secure
+    from app.engine.providers import get_provider
+
+    info = get_provider(settings).info
+    _, sandbox_reason = _sandbox_status()
     checklist = [
         S.SecurityCheckOut(
             key="session_cookies",
@@ -553,9 +589,10 @@ def security_status(ctx: Context) -> S.SecurityStatusOut:
         ),
         S.SecurityCheckOut(
             key="secrets",
-            label="Encrypted secrets storage",
-            status="not_configured",
-            detail="No integration credentials are stored yet. Encrypted storage arrives with real integrations (Phase 3).",
+            label="Secrets kept server-side",
+            status="partial",
+            detail="The AI provider key lives only in server environment variables and is never sent to the browser, the model or logs. "
+            "No integration credentials are collected (WordPress uses its public read-only API). Encrypted per-workspace secret storage is not built yet.",
         ),
         S.SecurityCheckOut(
             key="backups",
@@ -571,15 +608,30 @@ def security_status(ctx: Context) -> S.SecurityStatusOut:
         ),
         S.SecurityCheckOut(
             key="egress",
-            label="Outbound network policy for AI providers",
-            status="not_configured",
-            detail="No AI provider is connected, so nothing is sent out. The egress gateway arrives in Phase 3.",
+            label="Outbound network policy",
+            status="enforced",
+            detail="Agent tools reach only allowlisted domains; private and internal addresses are blocked, connections are pinned to the "
+            "checked address, redirects to other hosts are refused, and size/time limits apply. A network-level firewall is still recommended in production.",
         ),
         S.SecurityCheckOut(
             key="deletion",
             label="Deletion protection and retention rules",
+            status="enforced",
+            detail=f"Deleting needs a one-time owner/admin approval of the exact file. A separate deletion service with its own database role "
+            f"re-checks everything right before deleting. Deleted files can be restored for {settings.deletion_retention_days} days, then their bytes are purged.",
+        ),
+        S.SecurityCheckOut(
+            key="policy_engine",
+            label="Policy engine and one-time approvals",
+            status="enforced",
+            detail="Every plan step is checked against your privacy mode, tool switches and allowed domains when planned and again right before it runs. "
+            "Approvals are bound to the exact action, expire, and are used once.",
+        ),
+        S.SecurityCheckOut(
+            key="sandbox",
+            label="Isolated code execution",
             status="partial",
-            detail="Deletion only creates a request for approval; nothing is deleted. Retention jobs are not configured.",
+            detail=sandbox_reason,
         ),
         S.SecurityCheckOut(
             key="malware_scan",
@@ -590,7 +642,7 @@ def security_status(ctx: Context) -> S.SecurityStatusOut:
     ]
     return S.SecurityStatusOut(
         privacy_mode=ws.privacy_mode,
-        privacy_enforced=False,
+        privacy_enforced=True,
         checklist=checklist,
         blocked_actions=[
             S.BlockedActionOut(
@@ -606,7 +658,7 @@ def security_status(ctx: Context) -> S.SecurityStatusOut:
             S.LabelValue(label="Audit events", value="Kept indefinitely (append-only)"),
             S.LabelValue(
                 label="Files",
-                value="Kept until you delete them — deletion needs approval and is disabled until Phase 3",
+                value=f"Kept until you delete them. Deleted files can be restored for {settings.deletion_retention_days} days, then removed.",
             ),
             S.LabelValue(
                 label="Sessions",
@@ -614,8 +666,16 @@ def security_status(ctx: Context) -> S.SecurityStatusOut:
             ),
             S.LabelValue(label="Password reset links", value="Expire after 1 hour, single use"),
         ],
-        ai_provider_policy="No AI provider is configured. Nothing from this workspace is sent to any external AI service. "
-        "Uploading a file never authorizes sharing it.",
+        ai_provider_policy=info.data_disclosure + " Uploading a file never authorizes sharing it.",
+    )
+
+
+def _sandbox_status() -> tuple[bool, str]:
+    """The API cannot probe the tools worker's sandbox; report the last status the worker published."""
+    return (
+        False,
+        "Code runs only in the tools worker's sandbox (no network, read-only system, resource limits). "
+        "Whether it is available depends on that worker's host; if it is not, code steps are blocked.",
     )
 
 
@@ -635,7 +695,7 @@ def settings_out(ctx: Context) -> S.SettingsOut:
             allowed_domains=list(ws.allowed_domains or []),
             can_edit=ctx.role in (WorkspaceRole.owner, WorkspaceRole.admin),
         ),
-        enforced=False,
+        enforced=True,
     )
 
 
@@ -676,7 +736,7 @@ def update_workspace_settings(ctx: Context, body: S.WorkspaceSettingsIn) -> S.Se
             ctx.log(
                 "privacy.mode_changed",
                 "security",
-                f'Privacy mode preference set to "{body.privacy_mode.value}" (saved, not enforced until Phase 3)',
+                f'Privacy mode set to "{body.privacy_mode.value}" (enforced by the policy engine)',
                 metadata={"from": ws.privacy_mode, "to": body.privacy_mode.value},
             )
             ws.privacy_mode = body.privacy_mode.value
@@ -689,7 +749,7 @@ def update_workspace_settings(ctx: Context, body: S.WorkspaceSettingsIn) -> S.Se
             ctx.log(
                 "privacy.ai_rules_changed",
                 "security",
-                "AI behaviour rules updated (saved, not enforced until Phase 3)",
+                "AI behaviour rules updated (they can only make the policy stricter)",
                 metadata=patch,
             )
             changed.append("ai_rules")
@@ -700,7 +760,7 @@ def update_workspace_settings(ctx: Context, body: S.WorkspaceSettingsIn) -> S.Se
             ctx.log(
                 "privacy.tool_permissions_changed",
                 "security",
-                "Tool permissions updated (saved, not enforced until Phase 3)",
+                "Tool permissions updated (enforced before every step)",
                 metadata=patch,
             )
             changed.append("tool_permissions")
@@ -733,7 +793,7 @@ def complete_onboarding(ctx: Context, body: S.OnboardingIn) -> None:
     ctx.log(
         "settings.onboarding_completed",
         "settings",
-        "Workspace setup completed (safety preferences saved, not enforced until Phase 3)",
+        "Workspace setup completed",
         metadata={"goals": body.goals, "where": body.where},
     )
 

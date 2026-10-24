@@ -82,14 +82,14 @@ def test_download_is_attachment_with_nosniff(make_user: Any) -> None:
 def test_classification_change_is_audited(make_user: Any) -> None:
     api = make_user()
     f = upload(api).json()
-    r = api.patch(f"/files/{f['id']}", {"classification": "private"})
-    assert r.json()["classification"] == "private"
+    r = api.patch(f"/files/{f['id']}", {"classification": "confidential"})
+    assert r.json()["classification"] == "confidential"
     assert api.patch(f"/files/{f['id']}", {"classification": "secret"}).status_code == 422
     acts = api.get("/activity", params={"type": "security"}).json()["items"]
     assert any(a["action"] == "privacy.classification_changed" for a in acts)
 
 
-def test_deletion_request_never_deletes(make_user: Any, owner_engine: Any) -> None:
+def test_deletion_approval_only_queues_the_deletion_service(make_user: Any, owner_engine: Any) -> None:
     api = make_user()
     f = upload(api, "old.csv").json()
     r = api.post(f"/files/{f['id']}/deletion-request", {"reason": "Not used anymore"})
@@ -110,21 +110,28 @@ def test_deletion_request_never_deletes(make_user: Any, owner_engine: Any) -> No
     mine = next(d for d in dr if str(d.target_id) == f["id"])
     assert mine.target_type == "file" and mine.reason == "Not used anymore" and str(mine.approval_id) == appr["id"]
     assert mine.expected_affected[0]["name"] == "old.csv" and mine.status == "pending_approval"
-    # Approving records the decision only.
+    # Approving records the decision and queues the separate deletion service; the API deletes nothing.
     r = api.post(
         f"/approvals/{appr['id']}/decision",
         {"decision": "approve", "acknowledged": True, "confirmed_items": ["old.csv"]},
     )
     assert r.status_code == 200
-    assert r.json()["status"] == "approved" and r.json()["execution_state"] == "blocked_until_phase3"
-    # The file and its bytes still exist.
+    assert r.json()["status"] == "approved" and r.json()["execution_state"] == "pending_execution"
+    assert r.json()["operation"] == "deletion.execute" and r.json()["targets"] == [f"file:{f['id']}"]
+    # The file and its bytes still exist until the deletion service runs.
     assert api.get(f"/files/{f['id']}").status_code == 200
     assert api.get(f"/files/{f['id']}/download").status_code == 200
     with owner_engine.connect() as c:
         status = c.execute(
             text("SELECT status FROM deletion_requests WHERE approval_id = :a"), {"a": appr["id"]}
         ).scalar_one()
-    assert status == "approved_blocked"
+        job = c.execute(
+            text(
+                "SELECT kind, queue, status FROM jobs WHERE payload->>'deletion_request_id' IS NOT NULL ORDER BY created_at DESC LIMIT 1"
+            )
+        ).one()
+    assert status == "approved"
+    assert (job.kind, job.queue, job.status) == ("deletion.execute", "deletion", "pending")
 
 
 def test_upload_requires_known_collection_and_auth(make_user: Any, app: Any) -> None:

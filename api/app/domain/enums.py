@@ -65,6 +65,9 @@ class StepState(StrEnum):
     waiting_for_input = "waiting_for_input"
     skipped = "skipped"
     cancelled = "cancelled"
+    awaiting_approval = "awaiting_approval"  # waiting for its own one-time approval
+    blocked = "blocked"  # denied by the policy engine; never runs
+    rejected = "rejected"  # the user rejected its approval
 
 
 class ApprovalCategory(StrEnum):
@@ -74,6 +77,7 @@ class ApprovalCategory(StrEnum):
     send_message = "send_message"
     record_deletion = "record_deletion"
     permission_change = "permission_change"
+    code_execution = "code_execution"  # running a program in the sandbox
 
 
 class ApprovalStatus(StrEnum):
@@ -92,7 +96,11 @@ class ApprovalDecisionKind(StrEnum):
 
 class ExecutionState(StrEnum):
     not_executed = "not_executed"
-    blocked_until_phase3 = "blocked_until_phase3"
+    blocked_until_phase3 = "blocked_until_phase3"  # legacy (Phase 2 rows)
+    pending_execution = "pending_execution"  # approved; the worker has not run it yet
+    executed = "executed"
+    execution_failed = "execution_failed"
+    invalidated = "invalidated"  # the operation or policy changed after approval
 
 
 class RiskLevel(StrEnum):
@@ -119,10 +127,16 @@ class ScanStatus(StrEnum):
 
 
 class FileClassification(StrEnum):
-    private = "private"
-    approved_integration = "approved_integration"
+    """Data classification (Phase 3). Migration 0004 maps private→confidential and
+    approved_integration→internal."""
+
     public = "public"
+    internal = "internal"
+    confidential = "confidential"
     unknown = "unknown"
+
+
+DataClass = FileClassification
 
 
 class WorkspaceRole(StrEnum):
@@ -143,6 +157,7 @@ class IntegrationStatus(StrEnum):
     not_connected = "not_connected"
     backend_required = "backend_required"
     connected = "connected"
+    error = "error"
 
 
 class AuthTokenPurpose(StrEnum):
@@ -152,13 +167,33 @@ class AuthTokenPurpose(StrEnum):
 
 class DeletionRequestStatus(StrEnum):
     pending_approval = "pending_approval"
-    approved_blocked = "approved_blocked"  # approved, but execution disabled until Phase 3
+    approved_blocked = "approved_blocked"  # legacy (Phase 2): approved while deletion was disabled
+    approved = "approved"  # approved; waiting for the deletion service to re-validate and execute
     rejected = "rejected"
     changes_requested = "changes_requested"
+    executed = "executed"  # soft-deleted by the deletion service (recoverable during retention)
+    execution_refused = "execution_refused"  # re-validation failed right before execution
+    restored = "restored"  # undone during the retention window
 
 
 class JobStatus(StrEnum):
-    pending = "pending"  # recorded; no worker is installed in Phase 2
+    pending = "pending"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"  # will not be retried; kept for inspection
+    dead = "dead"  # dead-letter: retries exhausted or outcome unknown
+    cancelled = "cancelled"
+
+
+class JobQueue(StrEnum):
+    orchestrator = "orchestrator"  # planning + task advancement (calls the model provider)
+    tools = "tools"  # isolated tool execution
+    deletion = "deletion"  # privileged deletion service
+
+
+class ModelLocation(StrEnum):
+    local = "local"  # runs on infrastructure you control; task data does not leave it
+    external = "external"  # a third-party API receives the data you send
 
 
 def values(e: type[StrEnum]) -> list[str]:

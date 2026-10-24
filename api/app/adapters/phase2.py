@@ -79,7 +79,7 @@ class RequireApprovalPolicy:
     files that are not classified are blocked from leaving. Not yet wired to an execution engine."""
 
     def evaluate(self, action: ProposedAction) -> PolicyDecision:
-        if action.data_leaves_workspace and any(c in ("unknown", "private") for c in action.file_classifications):
+        if action.data_leaves_workspace and any(c in ("unknown", "confidential") for c in action.file_classifications):
             return PolicyDecision(False, True, "Private or unclassified files cannot leave the workspace.")
         return PolicyDecision(True, True, "Every sensitive action needs a one-time approval.")
 
