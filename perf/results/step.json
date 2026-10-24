@@ -1,0 +1,75 @@
+[
+  {
+    "stage": "step:10vu",
+    "vus": 10,
+    "seconds": 45,
+    "requests": 720,
+    "rps": 16.0,
+    "read_p50_ms": 15.1,
+    "read_p95_ms": 31.4,
+    "read_p99_ms": 437.6,
+    "write_p95_ms": 48.1,
+    "error_rate": 0.0,
+    "throttled_429_503": 0,
+    "codes": {
+      "200": 646,
+      "201": 74
+    },
+    "slo": "PASS"
+  },
+  {
+    "stage": "step:25vu",
+    "vus": 25,
+    "seconds": 45,
+    "requests": 1758,
+    "rps": 39.1,
+    "read_p50_ms": 16.0,
+    "read_p95_ms": 39.3,
+    "read_p99_ms": 581.5,
+    "write_p95_ms": 55.3,
+    "error_rate": 0.0,
+    "throttled_429_503": 0,
+    "codes": {
+      "200": 1555,
+      "201": 203
+    },
+    "slo": "PASS"
+  },
+  {
+    "stage": "step:50vu",
+    "vus": 50,
+    "seconds": 45,
+    "requests": 3342,
+    "rps": 74.3,
+    "read_p50_ms": 21.4,
+    "read_p95_ms": 143.2,
+    "read_p99_ms": 1089.1,
+    "write_p95_ms": 161.5,
+    "error_rate": 0.0,
+    "throttled_429_503": 0,
+    "codes": {
+      "200": 2996,
+      "201": 346
+    },
+    "slo": "FAIL"
+  },
+  {
+    "stage": "step:100vu",
+    "vus": 100,
+    "seconds": 45,
+    "requests": 5102,
+    "rps": 113.4,
+    "read_p50_ms": 149.7,
+    "read_p95_ms": 521.4,
+    "read_p99_ms": 2410.9,
+    "write_p95_ms": 710.2,
+    "error_rate": 0.0076,
+    "throttled_429_503": 39,
+    "codes": {
+      "200": 4560,
+      "201": 503,
+      "503": 39
+    },
+    "slo": "FAIL"
+  }
+]

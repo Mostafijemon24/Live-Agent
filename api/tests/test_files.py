@@ -141,3 +141,40 @@ def test_upload_requires_known_collection_and_auth(make_user: Any, app: Any) -> 
 
     anon = Api(app)
     assert upload(anon).status_code == 401
+
+
+def test_anonymous_multipart_is_refused_before_the_body_is_read(app: Any) -> None:
+    """The middleware answers 401 without consuming the body, so anonymous clients cannot make the API spool uploads."""
+    import asyncio
+
+    from app.core.middleware import RequestContextMiddleware
+
+    reached: list[bool] = []
+    reads: list[bool] = []
+
+    async def inner(scope: Any, receive: Any, send: Any) -> None:
+        reached.append(True)
+
+    async def receive() -> dict[str, Any]:
+        reads.append(True)
+        return {"type": "http.request", "body": b"x" * 1024, "more_body": True}
+
+    sent: list[dict[str, Any]] = []
+
+    async def send(msg: dict[str, Any]) -> None:
+        sent.append(msg)
+
+    mw = RequestContextMiddleware(inner, max_body_bytes=10_000_000, hsts=False, session_cookie="stw_session")
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/files",
+        "headers": [(b"content-type", b"multipart/form-data; boundary=x"), (b"cookie", b"stw_csrf=abc")],
+    }
+    asyncio.run(mw(scope, receive, send))
+    assert sent[0]["status"] == 401 and b"not_authenticated" in sent[1]["body"]
+    assert not reached and not reads
+    # With a session cookie the request reaches the app (the route still validates the session).
+    scope["headers"] = [(b"content-type", b"multipart/form-data; boundary=x"), (b"cookie", b"stw_session=abc")]
+    asyncio.run(mw(scope, receive, send))
+    assert reached

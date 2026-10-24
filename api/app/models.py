@@ -274,6 +274,7 @@ class TaskEvent(Base):
         ForeignKeyConstraint(["workspace_id", "task_id"], ["tasks.workspace_id", "tasks.id"], ondelete="RESTRICT"),
         CheckConstraint("level IN ('info','warn','error','note')", name="level_valid"),
         Index("ix_task_events_task_created", "task_id", "created_at"),
+        Index("ix_task_events_task_seq", "task_id", "seq"),
     )
 
 
@@ -319,6 +320,14 @@ class Job(Base):
         _check("queue", E.JobQueue),
         CheckConstraint("attempts >= 0 AND max_attempts >= 1", name="attempts_valid"),
         Index("ix_jobs_claim", "queue", "status", "run_after", "priority"),
+        Index(
+            "ix_jobs_pending_claim",
+            "queue",
+            "priority",
+            "run_after",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_jobs_ws_status", "workspace_id", "status"),
         ForeignKeyConstraint(
             ["workspace_id", "task_id"],
             ["tasks.workspace_id", "tasks.id"],
@@ -577,6 +586,7 @@ class AuditEvent(Base):
             name="category_valid",
         ),
         Index("ix_audit_ws_created", "workspace_id", "created_at"),
+        Index("ix_audit_ws_seq", "workspace_id", "seq"),
         Index("ix_audit_ws_task", "workspace_id", "task_id"),
     )
 

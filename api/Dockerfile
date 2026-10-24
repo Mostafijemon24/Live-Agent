@@ -15,4 +15,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').status==200 else 1)"
 # --no-proxy-headers: never let uvicorn rewrite the client address from X-Forwarded-For
 # (client-controlled through the web proxy). The app reads X-Real-IP set by Caddy instead.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--no-proxy-headers"]
+# Keep-alive and graceful-shutdown bounds; requests are also bounded by DB statement_timeout (15 s).
+# API_PROCESSES (default 2) and API_MAX_CONCURRENCY (per process; excess gets an immediate 503).
+ENV API_PROCESSES=2 API_MAX_CONCURRENCY=80
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers \"$API_PROCESSES\" --no-proxy-headers --timeout-keep-alive 5 --timeout-graceful-shutdown 25 --limit-concurrency \"$API_MAX_CONCURRENCY\""]

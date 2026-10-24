@@ -476,7 +476,7 @@ Development emails are written to `api/var/mail-outbox/`.
 8. **Backups** (daily at 03:00):
    ```bash
    crontab -e
-   0 3 * * * cd /opt/live-agent && ./deploy/db/backup.sh /opt/backups >> /var/log/steward-backup.log 2>&1
+   0 3 * * * cd /opt/live-agent && ./deploy/backup.sh /opt/steward-backups >> /var/log/steward-backup.log 2>&1
    ```
    Also copy the `storage` Docker volume (uploaded files) and `/opt/backups` to another location. Test a restore regularly.
 9. **Update later**:
@@ -671,6 +671,10 @@ Only if your administrator configured an <i>external</i> model — the app says 
 | [API_CONTRACT.md](API_CONTRACT.md) | Every endpoint, error codes, rate limits, roles |
 | [SECURITY_AND_PRIVACY.md](SECURITY_AND_PRIVACY.md) | Enforced vs. not-yet-enforced controls |
 | [SECURITY_REVIEW.md](SECURITY_REVIEW.md) | Independent security review and fixes |
+| [PRODUCTION_READINESS_REPORT.md](PRODUCTION_READINESS_REPORT.md) | Phase 4: findings, test results, Go/No-Go |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Hostinger VPS deployment, backups, releases, rollback |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Health, metrics, alerts, telemetry policy |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | Load-test results, SLOs, when to scale |
 | [PHASE3_REPORT.md](PHASE3_REPORT.md) | Agent engine: what was built, tests, review findings, limitations and risks |
 | [PHASE2_REPORT.md](PHASE2_REPORT.md) | Foundation: what was built, commands run, results, load baseline |
 | [web/FRONTEND_GUIDE.md](web/FRONTEND_GUIDE.md) | Conventions for screens and the API adapter |

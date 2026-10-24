@@ -69,7 +69,7 @@ MODEL_LOCATION=external
 | **সম্পন্ন টাস্ক ও রিপোর্ট** | **অনুমোদিত তালিকার বাইরের সাইট ব্লক** |
 | <img src="docs/images/phase3/04-task-completed.png"> | <img src="docs/images/phase3/06-external-transfer-blocked.png"> |
 
-টেস্টের ফলাফল (২০২৬-১০-২৪): ব্যাকএন্ডে ৪১৩টি টেস্ট পাস, ফ্রন্টএন্ডে ৩৯টি, ব্রাউজার end-to-end: smoke ২৫/২৫ ও agent flow ১৩/১৩। স্বাধীন নিরাপত্তা রিভিউতে পাওয়া ১১টি সমস্যার প্রতিটির সমাধান ও রিগ্রেশন টেস্ট আছে (কয়েকটি আংশিক, ডকুমেন্টেড) — [SECURITY_REVIEW.md](SECURITY_REVIEW.md), [PHASE3_REPORT.md](PHASE3_REPORT.md)।
+টেস্টের ফলাফল (২০২৬-১০-২৪): ব্যাকএন্ডে ৪১৩টি টেস্ট পাস, ফ্রন্টএন্ডে ৩৯টি, ব্রাউজার end-to-end: smoke ২৫/২৫ ও agent flow ১৩/১৩। স্বাধীন নিরাপত্তা রিভিউতে পাওয়া ১১টি সমস্যার প্রতিটির সমাধান ও রিগ্রেশন টেস্ট আছে (কয়েকটি আংশিক, ডকুমেন্টেড) — [SECURITY_REVIEW.md](SECURITY_REVIEW.md), [PHASE3_REPORT.md](PHASE3_REPORT.md)। ফেজ ৪ (প্রোডাকশন হার্ডেনিং): [PRODUCTION_READINESS_REPORT.md](PRODUCTION_READINESS_REPORT.md), ডিপ্লয় গাইড [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)।
 
 > নিচের বিস্তারিত অংশগুলো মূলত ফেজ ২-এর সময় লেখা। যেখানে পার্থক্য আছে (যেমন "কিছুই চালানো হয় না" বা "ফেজ ৩-এ আসবে"), সেখানে উপরের এই অংশ এবং ইংরেজি [README.md](README.md) সর্বশেষ ও সঠিক তথ্য দেয়।
 
@@ -425,7 +425,7 @@ npm run dev          # http://localhost:3000
 8. **ব্যাকআপ** (প্রতিদিন রাত ৩টায়):
    ```bash
    crontab -e
-   0 3 * * * cd /opt/live-agent && ./deploy/db/backup.sh /opt/backups >> /var/log/steward-backup.log 2>&1
+   0 3 * * * cd /opt/live-agent && ./deploy/backup.sh /opt/steward-backups >> /var/log/steward-backup.log 2>&1
    ```
    `storage` Docker ভলিউম (আপলোড করা ফাইল) ও `/opt/backups` অন্য কোথাও কপি করে রাখুন। নিয়মিত রিস্টোর পরীক্ষা করুন।
 9. **পরে আপডেট করতে**:

@@ -62,7 +62,7 @@ This page separates what is **enforced and covered by an automated test** from w
 | PostgreSQL Row-Level Security | Not enabled. Isolation is enforced by the application and composite FKs, and proven by tests. |
 | Tamper-evident (hash-chained) audit log | Append-only is enforced for the app role and by a trigger, but the schema owner can disable the trigger. Hash chaining or shipping events to an external write-once log is future work. |
 | Retention for other data | Deleted files are purged automatically after `DELETION_RETENTION_DAYS`. Tasks, audit events and model usage records have no automated retention yet. |
-| Automated, restore-tested backups | `deploy/db/backup.sh` exists. Scheduling it and testing restores is an operator task. |
+| Automated, restore-tested backups | `deploy/backup.sh` (database + files + checksummed manifest, optional age encryption) and `deploy/restore.sh verify/restore` were tested in the production rehearsal (verify, tamper detection, encrypted backup, full restore). Scheduling, off-site copies and the weekly `verify` on the real server are operator tasks (docs/DEPLOYMENT.md §8). |
 | MFA, session list / remote sign-out, account lockout notifications | Not implemented. |
 | Data export and account deletion | Requests are recorded for manual handling. |
 

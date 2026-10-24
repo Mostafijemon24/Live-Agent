@@ -1,0 +1,20 @@
+[
+  {
+    "stage": "baseline:10vu",
+    "vus": 10,
+    "seconds": 60,
+    "requests": 961,
+    "rps": 16.0,
+    "read_p50_ms": 13.0,
+    "read_p95_ms": 25.4,
+    "read_p99_ms": 146.6,
+    "write_p95_ms": 34.8,
+    "error_rate": 0.0,
+    "throttled_429_503": 0,
+    "codes": {
+      "200": 871,
+      "201": 90
+    },
+    "slo": "PASS"
+  }
+]

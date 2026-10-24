@@ -1,0 +1,87 @@
+[
+  {
+    "stage": "spike:5vu",
+    "vus": 5,
+    "seconds": 20,
+    "requests": 166,
+    "rps": 8.3,
+    "read_p50_ms": 14.6,
+    "read_p95_ms": 28.4,
+    "read_p99_ms": 198.2,
+    "write_p95_ms": 148.5,
+    "error_rate": 0.0,
+    "throttled_429_503": 0,
+    "codes": {
+      "200": 155,
+      "201": 11
+    },
+    "p95_by_endpoint_ms": {
+      "agent_status": 198.2,
+      "approvals": 23.9,
+      "create_task": 148.5,
+      "dashboard": 33.9,
+      "files": 17.1,
+      "notifications": 107.5,
+      "task_detail": 28.4,
+      "task_list": 20.8
+    },
+    "slo": "PASS"
+  },
+  {
+    "stage": "spike:150vu",
+    "vus": 150,
+    "seconds": 30,
+    "requests": 2500,
+    "rps": 83.3,
+    "read_p50_ms": 476.0,
+    "read_p95_ms": 6891.2,
+    "read_p99_ms": 11393.1,
+    "write_p95_ms": 6985.9,
+    "error_rate": 0.0248,
+    "throttled_429_503": 62,
+    "codes": {
+      "200": 2162,
+      "201": 276,
+      "503": 62
+    },
+    "p95_by_endpoint_ms": {
+      "agent_status": 9464.3,
+      "approvals": 6789.0,
+      "create_task": 6985.9,
+      "dashboard": 6254.2,
+      "files": 8177.0,
+      "notifications": 7227.8,
+      "task_detail": 7384.8,
+      "task_list": 1277.1
+    },
+    "slo": "FAIL"
+  },
+  {
+    "stage": "spike:5vu",
+    "vus": 5,
+    "seconds": 20,
+    "requests": 161,
+    "rps": 8.1,
+    "read_p50_ms": 15.0,
+    "read_p95_ms": 26.7,
+    "read_p99_ms": 179.6,
+    "write_p95_ms": 33.6,
+    "error_rate": 0.0,
+    "throttled_429_503": 0,
+    "codes": {
+      "200": 146,
+      "201": 15
+    },
+    "p95_by_endpoint_ms": {
+      "agent_status": 15.7,
+      "approvals": 16.8,
+      "create_task": 33.6,
+      "dashboard": 107.2,
+      "files": 16.1,
+      "notifications": 243.4,
+      "task_detail": 25.8,
+      "task_list": 18.1
+    },
+    "slo": "PASS"
+  }
+]

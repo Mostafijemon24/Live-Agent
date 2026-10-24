@@ -153,7 +153,7 @@ def _run(settings: Settings, code: str) -> SandboxResult:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": "/tmp", "PYTHONDONTWRITEBYTECODE": "1"},  # noqa: S108 - private tmpfs inside the sandbox namespace
+            env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": "/tmp", "PYTHONDONTWRITEBYTECODE": "1"},  # noqa: S108  # nosec B108 - private tmpfs inside the sandbox namespace
             cwd="/",
             close_fds=True,
             start_new_session=True,

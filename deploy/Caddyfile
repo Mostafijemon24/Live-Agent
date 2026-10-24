@@ -1,17 +1,56 @@
-# TLS termination and reverse proxy in front of the web app.
+# TLS termination and reverse proxy in front of the web app (the only public entry point).
+{
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 60s
+			write 120s
+			idle 2m
+		}
+		max_header_size 32KB
+		# HTTP/3 needs UDP 443, which is not published; do not advertise it.
+		protocols h1 h2
+	}
+}
+
 {$DOMAIN} {
 	encode zstd gzip
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
 		-Server
 	}
-	# Never proxy internal health/docs paths of the API to the internet.
-	@internal path /healthz /api/v1/docs* /api/v1/openapi.json
+	# Internal endpoints are never served to the internet.
+	@internal path /healthz /livez /readyz /metrics /api/v1/docs* /api/v1/openapi.json
 	respond @internal 404
+
+	# Long-lived caching ONLY for content-hashed public build assets.
+	@static path /_next/static/*
+	header @static Cache-Control "public, max-age=31536000, immutable"
+	# Everything else (pages, API) must never be stored by a browser or shared cache. Next.js marks
+	# prerendered page shells "s-maxage=31536000"; deferred so it replaces the upstream value.
+	@dynamic not path /_next/static/*
+	header @dynamic {
+		Cache-Control "no-store"
+		defer
+	}
+
+	request_body {
+		max_size 30MB
+	}
 	reverse_proxy web:3000 {
 		# Overwrite (never append) client-supplied values with the real peer address.
 		# The API trusts only X-Real-IP, and only when TRUST_PROXY_HEADERS=true.
 		header_up X-Real-IP {remote_host}
 		header_up X-Forwarded-For {remote_host}
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 90s
+		}
+	}
+	log {
+		output stdout
+		format json
 	}
 }

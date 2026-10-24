@@ -70,7 +70,7 @@ def test_migrations_upgrade_downgrade_upgrade() -> None:
     run_migrations(url)
     eng = create_engine(url)
     with eng.connect() as c:
-        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
+        assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0006"
         tables = set(c.execute(text("SELECT tablename FROM pg_tables WHERE schemaname='public'")).scalars())
     eng.dispose()
     assert {"users", "workspaces", "tasks", "audit_events", "deletion_requests", "jobs", "usage_counters"} <= tables
@@ -366,3 +366,47 @@ def test_production_config_guards(monkeypatch: Any) -> None:
     for override, needle in bad_cases:
         with pytest.raises(ValidationError, match=needle):
             Settings(**{**good, **override})
+
+
+def test_worker_role_skips_http_only_guards_but_keeps_the_rest(monkeypatch: Any) -> None:
+    """Workers neither serve HTTP nor send mail; they must still refuse weak secrets and unsafe egress."""
+    from pydantic import ValidationError
+
+    from app.core.config import Settings
+
+    worker: dict[str, Any] = {
+        "env": "production",
+        "process_role": "worker",
+        "mail_backend": "disabled",
+        "trust_proxy_headers": False,
+        "app_origin": "http://localhost:3000",
+        "database_url": "postgresql+psycopg://steward_worker:Str0ng-Random-Value@db/x",
+        "worker_database_url": "postgresql+psycopg://steward_worker:Str0ng-Random-Value@db/x",
+        "approval_signing_key": "k" * 40,
+    }
+    assert Settings(**worker).process_role == "worker"
+    for override, needle in [
+        ({"approval_signing_key": "short"}, "APPROVAL_SIGNING_KEY"),
+        ({"worker_database_url": "postgresql+psycopg://steward_worker:change-me@db/x"}, "WORKER_DATABASE_URL"),
+        ({"egress_allow_http": True}, "EGRESS"),
+        ({"model_provider": "mock"}, "MODEL_PROVIDER"),
+    ]:
+        with pytest.raises(ValidationError, match=needle):
+            Settings(**{**worker, **override})
+    # The same settings without the worker role are refused (default role is the strict "api").
+    with pytest.raises(ValidationError, match="MAIL_BACKEND"):
+        Settings(**{k: v for k, v in worker.items() if k != "process_role"})
+
+
+def test_api_refuses_to_start_with_the_worker_role(monkeypatch: Any) -> None:
+    from app import main
+    from app.core import config
+
+    monkeypatch.setenv("PROCESS_ROLE", "worker")
+    config.get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError, match="PROCESS_ROLE=worker"):
+            main.create_app()
+    finally:
+        monkeypatch.delenv("PROCESS_ROLE")
+        config.get_settings.cache_clear()

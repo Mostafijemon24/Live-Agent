@@ -1,0 +1,169 @@
+# Continuous integration. Builds and checks only: this workflow NEVER deploys.
+# Production releases are a manual, explicit step (docs/DEPLOYMENT.md §9) with a backup first.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.11.32"
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  api:
+    name: API — lint, types, tests, migrations, security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci-superuser-only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # Throwaway CI-only credentials for a disposable database; never real secrets.
+      PGHOST: 127.0.0.1
+      PGPASSWORD: ci-superuser-only
+      STEWARD_OWNER_PASSWORD: devowner
+      STEWARD_APP_PASSWORD: devapp
+      STEWARD_WORKER_PASSWORD: devworker
+      STEWARD_DELETER_PASSWORD: devdeleter
+      STEWARD_READONLY_PASSWORD: devreadonly
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Install (locked)
+        run: uv sync --locked --python "$PYTHON_VERSION"
+      - name: requirements.lock matches uv.lock
+        # The Docker image installs from requirements.lock; it must be exactly what uv.lock resolves to.
+        run: |
+          uv export --no-hashes --no-dev --frozen -o requirements.lock
+          git diff --exit-code -- requirements.lock \
+            || { echo "::error::requirements.lock is stale: run 'uv export --no-hashes --no-dev --frozen -o requirements.lock'"; exit 1; }
+      - name: Lint and format
+        run: |
+          uv run ruff check app tests
+          uv run ruff format --check app tests
+      - name: Type check
+        run: uv run mypy app
+      - name: Create database roles (same script as production)
+        working-directory: .
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          STEWARD_DB_NAME=steward POSTGRES_USER=postgres bash deploy/db/init-roles.sh
+      - name: Migrations — upgrade, downgrade, upgrade, drift check (isolated database)
+        env:
+          MIGRATION_DATABASE_URL: postgresql+psycopg://steward_owner:devowner@127.0.0.1:5432/steward_ci_migrations_test
+          DATABASE_URL: postgresql+psycopg://steward_owner:devowner@127.0.0.1:5432/steward_ci_migrations_test
+        run: |
+          PGPASSWORD=devowner psql -U steward_owner -d postgres -c "CREATE DATABASE steward_ci_migrations_test"
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+          uv run alembic check
+      - name: Tests (separate steward_test database created by the suite)
+        run: uv run pytest -q
+      - name: Dependency advisories (pip-audit)
+        run: uvx pip-audit -r requirements.lock --progress-spinner off
+      - name: Static analysis (bandit, medium+ severity fails)
+        run: uvx bandit -r app -q -ll
+
+  web:
+    name: Web — lint, types, tests, build, bundle secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install (locked)
+        run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Production build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_DEMO_MODE: "false"
+      - name: No secrets in the client bundle
+        run: npm run check:bundle
+      - name: Dependency advisories (runtime dependencies)
+        run: npm audit --omit=dev --audit-level=high
+
+  secrets:
+    name: Secret scan (repository tree)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: detect-secrets (fails on any finding not in the reviewed baseline)
+        run: |
+          uvx detect-secrets scan --all-files \
+            --exclude-files '(node_modules|\.next|\.venv|uv\.lock|package-lock\.json|docs/images|project/)' \
+            > /tmp/scan.json
+          python3 - <<'PY'
+          import json, sys
+          found = json.load(open("/tmp/scan.json"))["results"]
+          base = json.load(open(".secrets.baseline"))["results"]
+          known = {(f, s["hashed_secret"]) for f, items in base.items() for s in items}
+          new = [(f, s["line_number"], s["type"]) for f, items in found.items() for s in items
+                 if (f, s["hashed_secret"]) not in known]
+          for f, line, kind in new:
+              print(f"::error file={f},line={line}::possible secret ({kind})")
+          sys.exit(1 if new else 0)
+          PY
+
+  images:
+    name: Container images (built, not pushed)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [api, web, secrets]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          docker build -t steward-api:${{ github.sha }} api
+          docker build -t steward-web:${{ github.sha }} web
+      - name: Compose file is valid
+        run: docker compose --env-file .env.example config -q
+      - name: Release artifact (tags and manual runs only)
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          mkdir -p dist
+          docker save steward-api:${{ github.sha }} steward-web:${{ github.sha }} | gzip > dist/steward-images-${{ github.sha }}.tar.gz
+          git archive --format=tar.gz -o dist/steward-source-${{ github.sha }}.tar.gz HEAD
+          (cd dist && sha256sum * > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        with:
+          name: steward-release-${{ github.sha }}
+          path: dist/
+          retention-days: 30

@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     env: Literal["development", "test", "production"] = "development"
+    # "api" (default, strictest) or "worker". HTTP-only production checks (SMTP, proxy headers,
+    # https origin, rate limiting) apply to the API; workers never serve HTTP or send mail.
+    process_role: Literal["api", "worker"] = "api"
 
     # Runtime connection uses the least-privileged application role.
     database_url: SecretStr = SecretStr("postgresql+psycopg://steward_app:change-me@127.0.0.1:5432/steward")
@@ -55,6 +58,12 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
 
     request_max_body_bytes: int = Field(default=30 * 1024 * 1024)
+    # Database pool per API process (see docs/PERFORMANCE.md for the connection budget).
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
+    db_pool_timeout_seconds: float = 5.0
+    # GET /metrics is served only with this bearer token (unset = disabled). Never routed publicly.
+    metrics_token: SecretStr | None = None
 
     # ---------------------------------------------------------------- agent engine (Phase 3)
     # Database roles for background processes (see deploy/db/init-roles.sh). Never the owner role.
@@ -136,6 +145,14 @@ class Settings(BaseSettings):
         key = self.approval_signing_key.get_secret_value()
         if len(key) < 32 or any(p in key for p in placeholders):
             problems.append("APPROVAL_SIGNING_KEY must be a random secret of at least 32 characters")
+        if self.process_role == "api":
+            problems.extend(self._http_guards())
+        if problems:
+            raise ValueError("Unsafe production configuration: " + "; ".join(problems))
+        return self
+
+    def _http_guards(self) -> list[str]:
+        problems = []
         if self.mail_backend != "smtp":
             problems.append("MAIL_BACKEND must be smtp (users cannot verify or recover accounts otherwise)")
         elif not self.smtp_host or not self.smtp_starttls:
@@ -148,9 +165,7 @@ class Settings(BaseSettings):
             problems.append(
                 "TRUST_PROXY_HEADERS must be true behind the Caddy proxy (otherwise every user shares one rate-limit bucket)"
             )
-        if problems:
-            raise ValueError("Unsafe production configuration: " + "; ".join(problems))
-        return self
+        return problems
 
     @property
     def is_production(self) -> bool:

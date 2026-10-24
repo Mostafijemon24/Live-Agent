@@ -35,6 +35,11 @@ x-model-env: &model-env
   MODEL_PROVIDER_LABEL: ${MODEL_PROVIDER_LABEL:-}
   MONTHLY_MODEL_TOKEN_QUOTA: ${MONTHLY_MODEL_TOKEN_QUOTA:-2000000}
 
+# Bounded logs on every service (docker json-file rotation): 5 × 10 MB per container.
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "5"}
+
 x-hardening: &hardening
   read_only: true
   tmpfs: ["/tmp"]
@@ -51,6 +56,7 @@ x-worker-health: &worker-health
 
 x-worker-env: &worker-env
   ENV: ${APP_ENV}
+  PROCESS_ROLE: worker
   APPROVAL_SIGNING_KEY: ${APPROVAL_SIGNING_KEY}
   APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
   STORAGE_DIR: /data/storage
@@ -64,6 +70,7 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD}
@@ -94,13 +101,24 @@ services:
       db:
         condition: service_healthy
     restart: "no"
+    logging: *logging
 
   api:
     build: ./api
     restart: unless-stopped
+    logging: *logging
     environment:
       <<: [*api-env, *model-env]
       MODEL_API_KEY: ""  # the API only describes the provider; it never calls it
+      # Bearer token for /metrics (internal network only; Caddy never serves it). Empty = disabled.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # Per uvicorn process: keep API_PROCESSES * (DB_POOL_SIZE + DB_MAX_OVERFLOW) well below
+      # Postgres max_connections (100) minus workers and maintenance (see docs/PERFORMANCE.md).
+      API_PROCESSES: ${API_PROCESSES:-2}
+      API_MAX_CONCURRENCY: ${API_MAX_CONCURRENCY:-80}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-5}
     <<: *hardening
     networks: [backend]
     volumes:
@@ -114,6 +132,7 @@ services:
     build: ./api
     command: ["python", "-m", "app.workers", "orchestrator"]
     restart: unless-stopped
+    logging: *logging
     healthcheck: *worker-health
     environment:
       <<: [*worker-env, *model-env]
@@ -127,6 +146,7 @@ services:
     build: ./api
     command: ["python", "-m", "app.workers", "tools"]
     restart: unless-stopped
+    logging: *logging
     healthcheck: *worker-health
     environment:
       <<: [*worker-env, *model-env]
@@ -149,6 +169,7 @@ services:
     build: ./api
     command: ["python", "-m", "app.workers", "deletion"]
     restart: unless-stopped
+    logging: *logging
     healthcheck: *worker-health
     environment:
       <<: *worker-env
@@ -167,6 +188,7 @@ services:
     build: ./api
     command: ["python", "-m", "app.workers", "scheduler"]
     restart: unless-stopped
+    logging: *logging
     healthcheck: *worker-health
     environment: *worker-env
     <<: *hardening
@@ -182,7 +204,15 @@ services:
         API_INTERNAL_URL: http://api:8000
         NEXT_PUBLIC_DEMO_MODE: "false"
     restart: unless-stopped
+    logging: *logging
     networks: [backend, edge]
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       api:
         condition: service_healthy
@@ -193,15 +223,23 @@ services:
     image: caddy:2-alpine
     profiles: ["tls"]
     restart: unless-stopped
+    logging: *logging
     environment:
       DOMAIN: ${DOMAIN:-localhost}
     ports:
       - "80:80"
       - "443:443"
     networks: [edge]
+    # Runs as root inside the container only to bind 80/443; every other capability is dropped.
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: ["ALL"]
+    cap_add: ["NET_BIND_SERVICE"]
+    security_opt: ["no-new-privileges:true"]
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
+      - caddy-data:/data      # TLS certificates and ACME account (back up or let Caddy re-issue)
+      - caddy-config:/config
     depends_on:
       - web
 
@@ -215,3 +253,4 @@ volumes:
   db-data:
   storage:
   caddy-data:
+  caddy-config:
