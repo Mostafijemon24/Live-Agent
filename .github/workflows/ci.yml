@@ -126,8 +126,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
       - name: detect-secrets (fails on any finding not in the reviewed baseline)
         run: |
-          uvx detect-secrets scan --all-files \
-            --exclude-files '(node_modules|\.next|\.venv|uv\.lock|package-lock\.json|docs/images|project/)' \
+          # Tracked files only (same as the baseline); the baseline itself contains hashes.
+          uvx detect-secrets scan \
+            --exclude-files '(node_modules|\.next|\.venv|uv\.lock|package-lock\.json|docs/images|project/|\.secrets\.baseline)' \
             > /tmp/scan.json
           python3 - <<'PY'
           import json, sys
