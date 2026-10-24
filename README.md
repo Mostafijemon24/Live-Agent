@@ -24,6 +24,7 @@
   <img alt="tests" src="https://img.shields.io/badge/backend%20tests-252%20passing-16803C">
   <img alt="e2e" src="https://img.shields.io/badge/e2e-25%2F25-16803C">
   <img alt="stack" src="https://img.shields.io/badge/Next.js%2016%20·%20FastAPI%20·%20PostgreSQL%2016-172033">
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-16803C"></a>
 </p>
 
 > [!IMPORTANT]
@@ -576,5 +577,6 @@ No. No AI provider is configured in Phase 2, so nothing leaves your server. In P
 | [PHASE2_REPORT.md](PHASE2_REPORT.md) | What was built, commands run, results, load baseline, Phase 3 list |
 | [web/FRONTEND_GUIDE.md](web/FRONTEND_GUIDE.md) | Conventions for screens and the API adapter |
 | [docs/DESIGN_HANDOFF.md](docs/DESIGN_HANDOFF.md), `project/` | The approved Phase 1 design |
+| [LICENSE](LICENSE) | MIT license |
 
-**License:** no license file has been added yet — all rights reserved by the repository owner until one is chosen.
+**License:** [MIT](LICENSE) © 2026 Mostafijemon24 — free to use, modify and distribute, including commercially, as long as the copyright notice is kept. Provided "as is", without warranty.

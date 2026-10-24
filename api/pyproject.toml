@@ -2,6 +2,7 @@
 name = "steward-api"
 version = "0.2.0"
 description = "Steward AI agent workspace — Phase 2 API foundation"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi==0.162.0",
