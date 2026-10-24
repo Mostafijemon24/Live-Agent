@@ -48,7 +48,8 @@ export interface AgentApi {
   login(input: LoginInput): Promise<Me>;
   logout(): Promise<void>;
   verifyEmail(token: string): Promise<{ message: string }>;
-  resendVerification(): Promise<{ message: string }>;
+  /** Generic response whether or not the address has an account. */
+  resendVerification(email: string): Promise<{ message: string }>;
   forgotPassword(email: string): Promise<{ message: string }>;
   resetPassword(token: string, password: string): Promise<{ message: string }>;
   completeOnboarding(input: OnboardingInput): Promise<Me>;

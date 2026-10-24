@@ -1,0 +1,57 @@
+[project]
+name = "steward-api"
+version = "0.2.0"
+description = "Steward AI agent workspace — Phase 2 API foundation"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.162.0",
+  "uvicorn[standard]==0.54.0",
+  "sqlalchemy==2.0.55",
+  "alembic==1.20.1",
+  "psycopg[binary]==3.3.6",
+  "pydantic==2.14.1",
+  "pydantic-settings==2.16.1",
+  "email-validator==2.3.0",
+  "argon2-cffi==25.1.0",
+  "python-multipart==0.0.32",
+]
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+  "httpx==0.28.1",
+  "ruff==0.17.2",
+  "mypy==2.4.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "RUF"]
+# E501: line length is handled by `ruff format`. UP046: Pydantic generics keep the Generic[T] form.
+ignore = ["S101", "B008", "RUF012", "E501", "UP046"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "S311"]
+"migrations/**" = ["S608"]  # role name comes from deployment config, not user input
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+exclude = ["migrations/", "tests/"]
+
+[[tool.mypy.overrides]]
+module = ["argon2.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]

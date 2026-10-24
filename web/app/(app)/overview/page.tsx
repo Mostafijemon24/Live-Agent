@@ -1,3 +1,5 @@
+import { OverviewPage } from "@/features/overview/OverviewPage";
+
 export default function Page() {
-  return <div>Overview</div>;
+  return <OverviewPage />;
 }

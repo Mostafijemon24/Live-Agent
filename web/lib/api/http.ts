@@ -79,7 +79,7 @@ export class HttpAgentApi implements AgentApi {
   login(i: T.LoginInput) { return this.req<T.Me>("POST", "/auth/login", i); }
   async logout() { await this.req<void>("POST", "/auth/logout"); }
   verifyEmail(token: string) { return this.req<{ message: string }>("POST", "/auth/verify-email", { token }); }
-  resendVerification() { return this.req<{ message: string }>("POST", "/auth/resend-verification"); }
+  resendVerification(email: string) { return this.req<{ message: string }>("POST", "/auth/resend-verification", { email }); }
   forgotPassword(email: string) { return this.req<{ message: string }>("POST", "/auth/forgot-password", { email }); }
   resetPassword(token: string, password: string) { return this.req<{ message: string }>("POST", "/auth/reset-password", { token, password }); }
   completeOnboarding(i: T.OnboardingInput) { return this.req<T.Me>("POST", "/me/onboarding", i); }
